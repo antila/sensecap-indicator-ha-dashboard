@@ -51,6 +51,7 @@ int nav_init(void) {
 		lv_obj_set_size(s_tiles[i], NAV_TILE_WIDTH, NAV_TILE_HEIGHT);
 		nav_style_static_obj(s_tiles[i]);
 	}
+	lv_tileview_set_tile_by_index(s_tileview, NAV_TILE_HOME, 0, LV_ANIM_OFF);
 
 	lv_port_sem_give();
 

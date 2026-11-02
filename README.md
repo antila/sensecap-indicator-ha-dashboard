@@ -136,9 +136,10 @@ The RP2040 firmware only needs rebuilding when its sensor or UART code changes:
 
 ## Home Assistant dashboard
 
-The screen mirrors one Lovelace dashboard over Home Assistant's WebSocket
+The main screen mirrors one Lovelace dashboard over Home Assistant's WebSocket
 API. Add cards to that dashboard in Home Assistant and they appear on the
-device; edits show up live.
+device; edits show up live. Swipe left for the settings page: connection
+status, Wi-Fi, display, MQTT broker, IP address and firmware version.
 
 1. In Home Assistant, create a dashboard (e.g. URL `touch-screen`) and add
    cards. Button, tile, entity, entities, glance, heading, stacks and grids are
@@ -148,9 +149,15 @@ device; edits show up live.
 3. On the serial console:
 
    ```text
-   setdash -a 192.168.1.10 -t <token> -d touch-screen
+   setdash -a 192.168.1.10 -t <token>
    dashconfig
    ```
+
+4. Swipe left to the settings page and tap the Home Assistant card to choose
+   which dashboard to show. The choice is saved on the device (`setdash -d
+   <url_path>` does the same from the console). Auto-generated dashboards,
+   including an unedited default dashboard, have no saved cards and can't be
+   shown until you take control of them in Home Assistant.
 
 Lights toggle on tap and get a brightness slider when dimmable; switches,
 input booleans, fans, covers, locks and media players toggle; scripts, scenes

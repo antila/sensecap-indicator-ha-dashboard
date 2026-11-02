@@ -106,8 +106,10 @@ The full producer/consumer/payload/policy manifest is in
 
 ## Home Assistant dashboard mirror
 
-The first tile (`NAV_TILE_HA_DASH`) mirrors a Lovelace dashboard over Home
-Assistant's WebSocket API, separate from the MQTT controls:
+`NAV_TILE_HA_DASH` (the boot tile) mirrors a Lovelace dashboard over Home
+Assistant's WebSocket API, separate from the MQTT controls. Its connection
+status is drawn into `settings_view_ha_slot()` on `NAV_TILE_SETTINGS`, the page
+to its right, so `settings_view_init()` runs before `indicator_ha_view_init()`.
 
 - `VIEW_EVENT_HA_DASH_CHANGED` is singleton replaceable state carrying only the
   layout generation. The screen reads the full snapshot through

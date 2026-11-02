@@ -19,7 +19,7 @@ enum {
     ICON_MAGIC, ICON_CODE, ICON_CHART, ICON_EYE, ICON_WALK, ICON_BATTERY,
     ICON_GAUGE, ICON_WIFI, ICON_CIRCLE, ICON_UTENSILS, ICON_BED, ICON_BATH,
     ICON_TREE, ICON_ROBOT, ICON_SMOG, ICON_SEEDLING, ICON_COFFEE, ICON_VOLUME,
-    ICON_COG, ICON_BULLSEYE, ICON_GLOBE,
+    ICON_COG, ICON_BULLSEYE, ICON_GLOBE, ICON_DASHBOARD, ICON_MAP,
     ICON_COUNT,
 };
 
@@ -52,6 +52,7 @@ static const char ICON_GLYPHS[ICON_COUNT][4] = {
     [ICON_COFFEE] = GLYPH(0xF0F4),     [ICON_VOLUME] = GLYPH(0xF028),
     [ICON_COG] = GLYPH(0xF013),        [ICON_BULLSEYE] = GLYPH(0xF140),
     [ICON_GLOBE] = GLYPH(0xF0AC),
+    [ICON_DASHBOARD] = GLYPH(0xF009), [ICON_MAP] = GLYPH(0xF279),
 };
 
 /* Matched as substrings of the mdi icon name, first match wins, so more
@@ -62,6 +63,8 @@ static const struct {
     int icon;
 } MDI_KEYWORDS[] = {
     {"lightning", ICON_BOLT},     {"flash", ICON_BOLT},
+    {"view-dashboard", ICON_DASHBOARD}, {"monitor-dashboard", ICON_DASHBOARD},
+    {"map", ICON_MAP},
     {"thermo", ICON_THERMO},      {"temperature", ICON_THERMO},
     {"lock-open", ICON_UNLOCK},   {"unlock", ICON_UNLOCK},
     {"lock", ICON_LOCK},

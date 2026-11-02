@@ -79,6 +79,11 @@ User taps a dashboard tile or releases a light slider
   → ha_dash.c drops it if the layout changed meanwhile, else sends call_service
   → Home Assistant's state change comes back through subscribe_entities
 
+User picks a dashboard (settings page → status card → picker)
+  → opening the picker posts HA_DASH_ACTION_LIST_DASHBOARDS → lovelace/dashboards/list
+  → selecting posts HA_DASH_ACTION_SELECT_DASHBOARD {value = index}
+  → ha_dash.c saves the url_path with ha_dash_config_set() and refetches lovelace/config
+
 Dashboard edited in Home Assistant
   → lovelace_updated event for our url_path → refetch config, carry live state over
 

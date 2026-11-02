@@ -5,18 +5,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "ha_dash.h"
 #include "ha_dash_present.h"
 #include "lv_port.h"
 #include "nav.h"
+#include "settings_view.h"
 #include "view_event.h"
 
 static const char *TAG = "ha-dash-screen";
 
 #define SCREEN_W        480
 #define SCREEN_H        480
-#define HEADER_H        76
 #define BODY_PAD        16
 #define GAP             12
 #define HALF_W          ((SCREEN_W - 2 * BODY_PAD - GAP) / 2)
@@ -49,6 +50,9 @@ static const char *TAG = "ha-dash-screen";
 #define GLYPH_SYNC    "\xEF\x80\xA1" /* U+F021 */
 #define GLYPH_WARNING "\xEF\x81\xB1" /* U+F071 */
 #define GLYPH_HOME    "\xEF\x80\x95" /* U+F015 */
+#define GLYPH_CHECK   "\xEF\x80\x8C" /* U+F00C */
+#define GLYPH_BACK    "\xEF\x81\x93" /* U+F053 */
+#define GLYPH_NEXT    "\xEF\x81\x94" /* U+F054 */
 
 LV_FONT_DECLARE(ui_font_dash16);
 LV_FONT_DECLARE(ui_font_dash20);
@@ -68,10 +72,18 @@ typedef struct {
     bool fresh;
 } tile_widgets_t;
 
+/* Connection status card, shown on the settings page. */
+static lv_obj_t *s_status_icon;
 static lv_obj_t *s_title;
 static lv_obj_t *s_status_dot;
 static lv_obj_t *s_status_text;
 static lv_obj_t *s_body;
+
+/* Dashboard picker, opened from the status card. */
+static lv_obj_t *s_picker;
+static lv_obj_t *s_picker_list;
+static uint32_t s_picker_revision = UINT32_MAX;
+static char s_picker_current[HA_DASH_PATH_LEN];
 static lv_obj_t *s_panel;
 static lv_obj_t *s_panel_icon;
 static lv_obj_t *s_panel_title;
@@ -313,36 +325,60 @@ static void update_card(int index)
     }
 }
 
-static void update_header(void)
+static void update_status_card(void)
 {
-    lv_label_set_text(s_title, s_snap->title[0] ? s_snap->title : "Home Assistant");
+    if (s_title == NULL) {
+        return;
+    }
+    const char *title = s_snap->title[0] ? s_snap->title : "Home Assistant";
+    for (int i = 0; i < s_snap->board_count; i++) {
+        if (strcmp(s_snap->boards[i].url_path, s_snap->dashboard) == 0) {
+            title = s_snap->boards[i].title;
+            break;
+        }
+    }
+    lv_label_set_text(s_title, title);
 
     uint32_t dot = COLOR_BUSY;
-    const char *text = "Connecting";
+    const char *state = "Connecting";
     switch (s_snap->status) {
         case HA_DASH_STATUS_READY:
             dot = COLOR_OK;
-            text = "Live";
+            state = "Live";
             break;
         case HA_DASH_STATUS_LOADING:
-            text = "Loading";
+            state = "Loading";
             break;
         case HA_DASH_STATUS_WAITING_NETWORK:
-            text = "No Wi-Fi";
+            state = "No Wi-Fi";
             break;
         case HA_DASH_STATUS_UNCONFIGURED:
             dot = COLOR_MUTED;
-            text = "Not set up";
+            state = "Not set up";
             break;
         case HA_DASH_STATUS_AUTH_FAILED:
         case HA_DASH_STATUS_ERROR:
             dot = COLOR_ERROR;
-            text = "Error";
+            state = "Error";
             break;
         default:
             break;
     }
+
+    char text[HA_DASH_MESSAGE_LEN + 32];
+    if (s_snap->status == HA_DASH_STATUS_READY) {
+        int cards = 0;
+        for (int i = 0; i < s_snap->tile_count; i++) {
+            cards += s_snap->tiles[i].kind != HA_DASH_KIND_HEADING;
+        }
+        snprintf(text, sizeof(text), "%s \xC2\xB7 %d card%s", state, cards, cards == 1 ? "" : "s");
+    } else if (s_snap->message[0]) {
+        snprintf(text, sizeof(text), "%s \xC2\xB7 %s", state, s_snap->message);
+    } else {
+        snprintf(text, sizeof(text), "%s", state);
+    }
     lv_obj_set_style_bg_color(s_status_dot, lv_color_hex(dot), LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_status_icon, lv_color_hex(dot), LV_PART_MAIN);
     lv_label_set_text(s_status_text, text);
 }
 
@@ -351,6 +387,7 @@ static void update_panel(void)
     const char *icon = GLYPH_SYNC;
     const char *title = "Connecting";
     const char *text = s_snap->message;
+    static char error_text[HA_DASH_MESSAGE_LEN + 96];
 
     switch (s_snap->status) {
         case HA_DASH_STATUS_UNCONFIGURED:
@@ -361,7 +398,7 @@ static void update_panel(void)
         case HA_DASH_STATUS_WAITING_NETWORK:
             icon = GLYPH_WIFI;
             title = "Waiting for Wi-Fi";
-            text = "Set up Wi-Fi with the gear button.";
+            text = "Swipe left to open Wi-Fi settings.";
             break;
         case HA_DASH_STATUS_AUTH_FAILED:
             icon = GLYPH_WARNING;
@@ -371,6 +408,10 @@ static void update_panel(void)
         case HA_DASH_STATUS_ERROR:
             icon = GLYPH_WARNING;
             title = "Can't show the dashboard";
+            snprintf(error_text, sizeof(error_text),
+                     "%s\nSwipe left and tap the Home Assistant\ncard to pick another dashboard.",
+                     s_snap->message);
+            text = error_text;
             break;
         case HA_DASH_STATUS_READY:
             icon = GLYPH_HOME;
@@ -398,12 +439,161 @@ static void update_panel(void)
     }
 }
 
+static void picker_close(void)
+{
+    if (s_picker) {
+        lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void on_picker_back(lv_event_t *e)
+{
+    (void)e;
+    picker_close();
+}
+
+static void on_picker_row(lv_event_t *e)
+{
+    int index = (int)(intptr_t)lv_event_get_user_data(e);
+    post_action(0, HA_DASH_ACTION_SELECT_DASHBOARD, index);
+    picker_close();
+    nav_go_tile(NAV_TILE_HA_DASH);
+}
+
+static void picker_message(const char *text)
+{
+    lv_obj_t *label = make_label(s_picker_list, &ui_font_dash16, COLOR_MUTED);
+    lv_obj_set_width(label, WIDE_W);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(label, 40, LV_PART_MAIN);
+    lv_label_set_text(label, text);
+}
+
+static void picker_fill(void)
+{
+    lv_obj_clean(s_picker_list);
+    s_picker_revision = s_snap->boards_revision;
+    strlcpy(s_picker_current, s_snap->dashboard, sizeof(s_picker_current));
+
+    if (s_snap->board_count == 0) {
+        picker_message(s_snap->status == HA_DASH_STATUS_READY ||
+                       s_snap->status == HA_DASH_STATUS_LOADING ||
+                       s_snap->status == HA_DASH_STATUS_ERROR
+                           ? "Loading dashboards..."
+                           : "Connect to Home Assistant to list dashboards.");
+        return;
+    }
+
+    for (int i = 0; i < s_snap->board_count; i++) {
+        const ha_dash_board_t *board = &s_snap->boards[i];
+        bool current = strcmp(board->url_path, s_snap->dashboard) == 0;
+
+        lv_obj_t *row = make_plain_box(s_picker_list);
+        lv_obj_set_size(row, WIDE_W, 72);
+        style_card(row);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, on_picker_row, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        ha_dash_tile_t probe;
+        memset(&probe, 0, sizeof(probe));
+        strlcpy(probe.icon, board->icon, sizeof(probe.icon));
+        lv_obj_t *icon = make_label(row, &ui_font_dash_icons, current ? COLOR_OK : COLOR_ICON_IDLE);
+        lv_label_set_text(icon, board->icon[0] ? ha_dash_icon_glyph(&probe) : GLYPH_HOME);
+        lv_obj_align(icon, LV_ALIGN_LEFT_MID, 20, 0);
+
+        lv_obj_t *title = make_line_label(row, &ui_font_dash20, COLOR_TEXT, WIDE_W - 140);
+        lv_label_set_text(title, board->title);
+        lv_obj_align(title, LV_ALIGN_TOP_LEFT, 72, 12);
+
+        char path[HA_DASH_PATH_LEN + 2];
+        snprintf(path, sizeof(path), "/%s", board->url_path[0] ? board->url_path : "lovelace");
+        lv_obj_t *sub = make_line_label(row, &ui_font_dash16, COLOR_MUTED, WIDE_W - 140);
+        lv_label_set_text(sub, path);
+        lv_obj_align(sub, LV_ALIGN_BOTTOM_LEFT, 72, -12);
+
+        if (current) {
+            lv_obj_t *check = make_label(row, &ui_font_dash_icons, COLOR_OK);
+            lv_label_set_text(check, GLYPH_CHECK);
+            lv_obj_align(check, LV_ALIGN_RIGHT_MID, -20, 0);
+        }
+    }
+}
+
+static void picker_create(void)
+{
+    s_picker = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_picker);
+    lv_obj_set_size(s_picker, SCREEN_W, SCREEN_H);
+    lv_obj_set_style_bg_opa(s_picker, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_picker, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_CLICKABLE); /* swallow taps behind it */
+    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *back = make_plain_box(s_picker);
+    lv_obj_set_size(back, 110, 52);
+    lv_obj_set_pos(back, 8, 14);
+    lv_obj_set_style_radius(back, 12, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(back, lv_color_hex(COLOR_CARD_PRESS), LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(back, on_picker_back, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *back_icon = make_label(back, &ui_font_dash16, COLOR_TEXT);
+    lv_label_set_text(back_icon, "Back");
+    lv_obj_align(back_icon, LV_ALIGN_LEFT_MID, 38, 0);
+    lv_obj_t *chevron = make_label(back, &ui_font_dash_icons, COLOR_TEXT);
+    lv_obj_set_style_transform_scale(chevron, 160, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_x(chevron, lv_pct(50), LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_y(chevron, lv_pct(50), LV_PART_MAIN);
+    lv_label_set_text(chevron, GLYPH_BACK);
+    lv_obj_align(chevron, LV_ALIGN_LEFT_MID, 6, 0);
+
+    lv_obj_t *title = make_label(s_picker, &ui_font_dash20, COLOR_TEXT);
+    lv_label_set_text(title, "Choose dashboard");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
+
+    s_picker_list = make_plain_box(s_picker);
+    lv_obj_add_flag(s_picker_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_picker_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_picker_list, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_size(s_picker_list, SCREEN_W, SCREEN_H - 80);
+    lv_obj_set_pos(s_picker_list, 0, 80);
+    lv_obj_set_style_pad_hor(s_picker_list, BODY_PAD, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(s_picker_list, BODY_PAD, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(s_picker_list, 10, LV_PART_MAIN);
+    lv_obj_set_flex_flow(s_picker_list, LV_FLEX_FLOW_COLUMN);
+}
+
+static void on_status_card_clicked(lv_event_t *e)
+{
+    (void)e;
+    if (s_picker == NULL) {
+        picker_create();
+    }
+    picker_fill();
+    lv_obj_scroll_to_y(s_picker_list, 0, LV_ANIM_OFF);
+    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_picker);
+    post_action(0, HA_DASH_ACTION_LIST_DASHBOARDS, 0); /* pick up new dashboards */
+}
+
+static void update_picker(void)
+{
+    if (s_picker == NULL || lv_obj_has_flag(s_picker, LV_OBJ_FLAG_HIDDEN)) {
+        return;
+    }
+    if (s_picker_revision != s_snap->boards_revision ||
+        strcmp(s_picker_current, s_snap->dashboard) != 0) {
+        picker_fill();
+    }
+}
+
 static void render(void)
 {
     if (s_snap->layout_generation != s_built_generation) {
         rebuild();
     }
-    update_header();
+    update_status_card();
+    update_picker();
     update_panel();
     for (int i = 0; i < s_snap->tile_count; i++) {
         tile_widgets_t *w = &s_tiles[i];
@@ -428,28 +618,45 @@ static void on_dash_changed(void *context, enum view_event_id id, const void *pa
     lv_port_sem_give();
 }
 
-static void create_header(lv_obj_t *tile)
+static void create_status_card(lv_obj_t *slot)
 {
-    lv_obj_t *header = make_plain_box(tile);
-    lv_obj_set_size(header, SCREEN_W, HEADER_H);
-    lv_obj_set_pos(header, 0, 0);
+    if (slot == NULL) {
+        return; /* no settings page, e.g. in a reduced build */
+    }
+    lv_obj_set_style_radius(slot, CARD_RADIUS, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slot, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slot, lv_color_hex(COLOR_CARD), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slot, lv_color_hex(COLOR_CARD_PRESS), LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(slot, on_status_card_clicked, LV_EVENT_CLICKED, NULL);
+    int32_t width = lv_obj_get_style_width(slot, LV_PART_MAIN);
 
-    /* The settings gear occupies the top-left 66px of every tile. */
-    s_title = make_line_label(header, &ui_font_dash20, COLOR_TEXT, 250);
-    lv_obj_align(s_title, LV_ALIGN_LEFT_MID, 84, 2);
+    lv_obj_t *chevron = make_label(slot, &ui_font_dash_icons, COLOR_MUTED);
+    lv_obj_set_style_transform_scale(chevron, 160, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_x(chevron, lv_pct(50), LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_y(chevron, lv_pct(50), LV_PART_MAIN);
+    lv_label_set_text(chevron, GLYPH_NEXT);
+    lv_obj_align(chevron, LV_ALIGN_RIGHT_MID, -12, 0);
 
-    lv_obj_t *status = make_plain_box(header);
-    lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    s_status_icon = make_label(slot, &ui_font_dash_icons, COLOR_MUTED);
+    lv_label_set_text(s_status_icon, GLYPH_HOME);
+    lv_obj_align(s_status_icon, LV_ALIGN_LEFT_MID, 22, 0);
+
+    s_title = make_line_label(slot, &ui_font_dash20, COLOR_TEXT, width - 130);
+    lv_obj_align(s_title, LV_ALIGN_TOP_LEFT, 76, 24);
+
+    lv_obj_t *status = make_plain_box(slot);
+    lv_obj_set_size(status, width - 130, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(status, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(status, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(status, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(status, 8, LV_PART_MAIN);
-    lv_obj_align(status, LV_ALIGN_RIGHT_MID, -BODY_PAD - 4, 2);
+    lv_obj_align(status, LV_ALIGN_BOTTOM_LEFT, 76, -22);
 
     s_status_dot = make_plain_box(status);
     lv_obj_set_size(s_status_dot, 10, 10);
     lv_obj_set_style_radius(s_status_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_status_dot, LV_OPA_COVER, LV_PART_MAIN);
-    s_status_text = make_label(status, &ui_font_dash16, COLOR_MUTED);
+    s_status_text = make_line_label(status, &ui_font_dash16, COLOR_MUTED, width - 148);
 }
 
 static void create_body(lv_obj_t *tile)
@@ -458,10 +665,10 @@ static void create_body(lv_obj_t *tile)
     lv_obj_add_flag(s_body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(s_body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_body, LV_SCROLLBAR_MODE_ACTIVE);
-    lv_obj_set_size(s_body, SCREEN_W, SCREEN_H - HEADER_H);
-    lv_obj_set_pos(s_body, 0, HEADER_H);
+    lv_obj_set_size(s_body, SCREEN_W, SCREEN_H);
+    lv_obj_set_pos(s_body, 0, 0);
     lv_obj_set_style_pad_hor(s_body, BODY_PAD, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(s_body, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(s_body, BODY_PAD, LV_PART_MAIN);
     lv_obj_set_style_pad_bottom(s_body, BODY_PAD, LV_PART_MAIN);
     lv_obj_set_style_pad_row(s_body, GAP, LV_PART_MAIN);
     lv_obj_set_style_pad_column(s_body, GAP, LV_PART_MAIN);
@@ -472,7 +679,7 @@ static void create_panel(lv_obj_t *tile)
 {
     s_panel = make_plain_box(tile);
     lv_obj_set_size(s_panel, WIDE_W, LV_SIZE_CONTENT);
-    lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, HEADER_H / 2 - 10);
+    lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_flex_flow(s_panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_panel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(s_panel, 12, LV_PART_MAIN);
@@ -487,7 +694,11 @@ static void create_panel(lv_obj_t *tile)
 
 void ha_dash_screen_create(void)
 {
-    s_snap = calloc(1, sizeof(*s_snap));
+    /* ~10 KB: keep it out of internal RAM, which the drivers need. */
+    s_snap = heap_caps_calloc(1, sizeof(*s_snap), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_snap == NULL) {
+        s_snap = calloc(1, sizeof(*s_snap));
+    }
     if (s_snap == NULL) {
         ESP_LOGE(TAG, "out of memory");
         return;
@@ -502,9 +713,9 @@ void ha_dash_screen_create(void)
         return;
     }
     lv_obj_set_style_bg_color(tile, lv_color_hex(COLOR_BG), LV_PART_MAIN);
-    create_header(tile);
     create_body(tile);
     create_panel(tile);
+    create_status_card(settings_view_ha_slot());
     render();
     lv_port_sem_give();
 

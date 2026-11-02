@@ -33,7 +33,11 @@ set(EXPLICIT_DOMAIN_SOURCES
 
 # Register the component
 idf_component_register(
-  SRCS "main.c" "lv_port.c" "indicator_model.c" "indicator_view.c"
+  SRCS "main.c" "lv_port.c" "lv_port_mem.c" "indicator_model.c" "indicator_view.c"
        ${EXPLICIT_DOMAIN_SOURCES} ${COLLECTED_SOURCES}
   INCLUDE_DIRS "." ${DIRECTORIES_TO_INCLUDE}
 )
+
+# LVGL calls lv_malloc_core() & co. from its own library, which links after
+# main; force lv_port_mem.c in (CONFIG_LV_USE_CUSTOM_MALLOC).
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-u lv_malloc_core")

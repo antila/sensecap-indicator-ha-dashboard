@@ -264,6 +264,30 @@ int ha_dash_layout_parse(const cJSON *config, ha_dash_snapshot_t *out)
     return out->tile_count;
 }
 
+int ha_dash_parse_dashboards(const cJSON *result, ha_dash_board_t *out, int max)
+{
+    int count = 0;
+    const cJSON *item;
+    cJSON_ArrayForEach(item, result) {
+        const char *path = json_string(item, "url_path");
+        if (path == NULL || count >= max - 1) { /* keep room for the default */
+            continue;
+        }
+        ha_dash_board_t *board = &out[count++];
+        copy_text(board->url_path, sizeof(board->url_path), path);
+        const char *title = json_string(item, "title");
+        copy_text(board->title, sizeof(board->title), title && title[0] ? title : path);
+        copy_text(board->icon, sizeof(board->icon), json_string(item, "icon"));
+    }
+    if (count < max) {
+        ha_dash_board_t *board = &out[count++];
+        copy_text(board->url_path, sizeof(board->url_path), "");
+        copy_text(board->title, sizeof(board->title), "Default dashboard");
+        copy_text(board->icon, sizeof(board->icon), "mdi:home");
+    }
+    return count;
+}
+
 int ha_dash_layout_entity_ids_json(const ha_dash_snapshot_t *snap, char *buf, size_t len)
 {
     size_t used = 0;

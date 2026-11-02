@@ -259,6 +259,28 @@ class HaDashTests(unittest.TestCase):
         }
         """)
 
+    def test_dashboard_list_appends_the_default_dashboard(self):
+        self.run_harness(r"""
+        int main(void)
+        {
+            cJSON *root = cJSON_Parse("[{\"id\":\"map\",\"title\":\"Map\",\"url_path\":\"map\",\"icon\":\"mdi:map\"},"
+                                      "{\"id\":\"t\",\"url_path\":\"touch-screen\"},{\"id\":\"broken\"}]");
+            ha_dash_board_t boards[3];
+            int n = ha_dash_parse_dashboards(root, boards, 3);
+            assert(n == 3);
+            EXPECT_STR(boards[0].title, "Map");
+            EXPECT_STR(boards[0].icon, "mdi:map");
+            EXPECT_STR(boards[1].title, "touch-screen"); /* no title: fall back to the path */
+            EXPECT_STR(boards[2].url_path, "");
+            EXPECT_STR(boards[2].title, "Default dashboard");
+            /* The default dashboard always fits, even when the list is full. */
+            assert(ha_dash_parse_dashboards(root, boards, 2) == 2);
+            EXPECT_STR(boards[1].url_path, "");
+            cJSON_Delete(root);
+            return 0;
+        }
+        """)
+
 
 if __name__ == "__main__":
     unittest.main()

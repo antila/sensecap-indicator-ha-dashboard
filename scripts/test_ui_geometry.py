@@ -48,27 +48,30 @@ class UiGeometryTests(unittest.TestCase):
         self.assertIn("LV_DIR_LEFT | LV_DIR_RIGHT", text)
         self.assertNotIn("nav_tile_scroll_dir", text)
 
-    def test_settings_is_gear_modal_not_fourth_tile(self) -> None:
+    def test_settings_is_a_tile_right_of_the_dashboard(self) -> None:
         nav_header = NAV_HEADER.read_text()
+        nav_text = NAV.read_text()
         settings_text = SETTINGS_VIEW.read_text()
 
-        self.assertIn("#define NAV_TILE_COUNT    1", nav_header)
-        self.assertNotIn("NAV_TILE_SETTINGS", nav_header)
-        self.assertIn("LV_SYMBOL_SETTINGS", settings_text)
-        self.assertIn("lv_obj_set_align(button, LV_ALIGN_TOP_LEFT)", settings_text)
-        self.assertIn("lv_obj_add_flag(s_settings_modal, LV_OBJ_FLAG_CLICKABLE)", settings_text)
-        self.assertIn("LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE", settings_text)
+        self.assertIn("#define NAV_TILE_HA_DASH  0", nav_header)
+        self.assertIn("#define NAV_TILE_SETTINGS 1", nav_header)
+        self.assertIn("#define NAV_TILE_COUNT    2", nav_header)
+        self.assertIn("#define NAV_TILE_HOME     NAV_TILE_HA_DASH", nav_header)
+        self.assertIn("lv_tileview_set_tile_by_index(s_tileview, NAV_TILE_HOME, 0, LV_ANIM_OFF)", nav_text)
+        self.assertIn("nav_get_tile(NAV_TILE_SETTINGS)", settings_text)
+        self.assertNotIn("lv_layer_top()", settings_text)
+        self.assertNotIn("LV_SYMBOL_SETTINGS", settings_text)
         self.assertIn("SCREEN_DISPLAY_MODAL", settings_text)
         self.assertIn("SCREEN_BROKER_MODAL", settings_text)
 
-    def test_settings_modal_preserves_subscreen_back_stack_and_shows_ip(self) -> None:
+    def test_settings_page_opens_subscreens_and_shows_ip(self) -> None:
         settings_text = SETTINGS_VIEW.read_text()
 
         self.assertIn('#include "esp_netif.h"', settings_text)
         self.assertIn("static lv_obj_t *s_settings_ip_label = NULL;", settings_text)
         self.assertIn("settings_refresh_ip_label();", settings_text)
         self.assertIn('esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")', settings_text)
-        self.assertIn('"IP: not connected"', settings_text)
+        self.assertIn('"Not connected"', settings_text)
 
         post_screen_start = settings_text.index("static bool settings_post_screen")
         post_screen_end = settings_text.index("static void settings_open_wifi")

@@ -23,6 +23,8 @@ extern "C" {
 #define HA_DASH_CLASS_LEN     24
 #define HA_DASH_TITLE_LEN     48
 #define HA_DASH_MESSAGE_LEN   64
+#define HA_DASH_MAX_BOARDS    16
+#define HA_DASH_PATH_LEN      64
 
 typedef enum {
     HA_DASH_KIND_SENSOR = 0, /* read-only value */
@@ -43,9 +45,18 @@ typedef enum {
 } ha_dash_status_t;
 
 typedef enum {
-    HA_DASH_ACTION_TAP = 0,       /* toggle / press, depending on the tile kind */
-    HA_DASH_ACTION_SET_LEVEL,     /* light brightness in percent (0 turns it off) */
+    HA_DASH_ACTION_TAP = 0,         /* toggle / press, depending on the tile kind */
+    HA_DASH_ACTION_SET_LEVEL,       /* light brightness in percent (0 turns it off) */
+    HA_DASH_ACTION_LIST_DASHBOARDS, /* refresh the dashboard list */
+    HA_DASH_ACTION_SELECT_DASHBOARD,/* value = index into boards[] */
 } ha_dash_action_t;
+
+/* One entry in Home Assistant's dashboard list. */
+typedef struct {
+    char url_path[HA_DASH_PATH_LEN]; /* "" = the default dashboard */
+    char title[HA_DASH_NAME_LEN];
+    char icon[HA_DASH_ICON_LEN];
+} ha_dash_board_t;
 
 typedef struct {
     ha_dash_kind_t kind;
@@ -70,10 +81,15 @@ typedef struct {
 typedef struct {
     ha_dash_status_t status;
     char message[HA_DASH_MESSAGE_LEN];
+    char dashboard[HA_DASH_PATH_LEN]; /* url_path being shown, "" = default */
     char title[HA_DASH_TITLE_LEN];
     uint32_t layout_generation; /* bumped whenever the tile list is rebuilt */
     uint8_t tile_count;
     ha_dash_tile_t tiles[HA_DASH_MAX_TILES];
+
+    uint32_t boards_revision; /* bumped whenever boards[] is refreshed */
+    uint8_t board_count;
+    ha_dash_board_t boards[HA_DASH_MAX_BOARDS];
 } ha_dash_snapshot_t;
 
 #ifdef __cplusplus

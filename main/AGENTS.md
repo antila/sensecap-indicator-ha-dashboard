@@ -54,15 +54,17 @@ main/assets/    ui_img_*.c, ui_font_*.c（图像/字体资源）
 
 ## 导航系统
 
-主屏使用 `lv_tileview`，横向滑动，当前只有 1 个 tile：
+主屏使用 `lv_tileview`，横向滑动，当前 2 个 tile，启动时显示仪表盘：
 
 ```c
 // main/nav/nav.h
 #define NAV_TILE_HA_DASH  0   // HA 仪表盘镜像（WebSocket API）
-#define NAV_TILE_COUNT    1
+#define NAV_TILE_SETTINGS 1   // 设置页（在仪表盘右侧，向左滑动打开）
+#define NAV_TILE_COUNT    2
+#define NAV_TILE_HOME     NAV_TILE_HA_DASH
 ```
 
-弹窗/设置使用 `lv_layer_top()` 作为父容器（悬浮在 tileview 之上）。
+Wi-Fi/显示/MQTT 等子弹窗使用 `lv_layer_top()` 作为父容器（悬浮在 tileview 之上）。
 
 ---
 
@@ -72,8 +74,8 @@ main/assets/    ui_img_*.c, ui_font_*.c（图像/字体资源）
 
 **Step 1** — `main/nav/nav.h` 增加常量（两处都要改）：
 ```c
-#define NAV_TILE_MY_PAGE  1
-#define NAV_TILE_COUNT    2   // ← 必须同步 +1，否则 tile 显示空白
+#define NAV_TILE_MY_PAGE  2
+#define NAV_TILE_COUNT    3   // ← 必须同步 +1，否则 tile 显示空白
 ```
 
 **Step 2** — `main/CMakeLists.txt` 的 `DIRECTORIES_TO_INCLUDE` 列表加入新目录：

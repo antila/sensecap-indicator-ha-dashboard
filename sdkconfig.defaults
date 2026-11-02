@@ -53,7 +53,10 @@ CONFIG_LV_DEF_REFR_PERIOD=10
 # 64 KB static pool. Composite-layer draw buffers (forced by any translucent
 # widget) exceed that pool, and the draw dispatcher live-locks retrying the
 # failed allocation: taskLVGL spins, IDLE1 starves, task_wdt fires forever.
-CONFIG_LV_USE_CLIB_MALLOC=y
+# Since the dashboard screen, lv_malloc() is main/lv_port_mem.c: the
+# same ESP heap, but PSRAM first. Plain malloc put every small LVGL object in
+# internal RAM, and a few dozen dashboard cards left Wi-Fi and I2C starved.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 # CONFIG_LV_MEMCPY_MEMSET_STD=y
 # CONFIG_LV_USE_ASSERT_NULL=y
 # CONFIG_LV_USE_ASSERT_MALLOC=y

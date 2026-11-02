@@ -16,12 +16,12 @@ int indicator_view_init(void) {
 	indicator_wifi_view_init();
 #endif
 
-#ifdef HA_H
-	indicator_ha_view_init();
-#endif
-
 #ifdef SETTINGS_H
 	settings_view_init();
+#endif
+
+#ifdef HA_H
+	indicator_ha_view_init(); /* fills the settings page's status slot */
 #endif
 
 	return 0;

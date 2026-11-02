@@ -56,6 +56,7 @@ static int s_next_id;
 static int s_config_request_id;
 static int s_entities_sub_id;
 static int s_lovelace_sub_id;
+static int s_boards_request_id;
 
 /* WebSocket-task state: reassembly of a message split over several events. */
 static char *s_rx_buf;
@@ -65,6 +66,15 @@ static void *dash_alloc(size_t size)
 {
     void *p = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     return p ? p : calloc(1, size);
+}
+
+/* cJSON makes one small allocation per node. A large dashboard has thousands,
+ * and small allocations would otherwise come from internal RAM and starve the
+ * drivers (I2C, Wi-Fi), so parse into PSRAM. */
+static void *json_alloc(size_t size)
+{
+    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(size);
 }
 
 static void notify_changed(void)
@@ -210,6 +220,15 @@ static void request_config(void)
     send_text(msg);
 }
 
+static void request_dashboards(void)
+{
+    char msg[64];
+    s_boards_request_id = ++s_next_id;
+    snprintf(msg, sizeof(msg), "{\"id\":%d,\"type\":\"lovelace/dashboards/list\"}",
+             s_boards_request_id);
+    send_text(msg);
+}
+
 static void subscribe_lovelace_updates(void)
 {
     char msg[96];
@@ -276,6 +295,26 @@ static void carry_over_state(ha_dash_tile_t *tile, const ha_dash_snapshot_t *old
     }
 }
 
+static void show_error(const char *message)
+{
+    ESP_LOGW(TAG, "%s", message);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_snap->tile_count) {
+        s_snap->tile_count = 0;
+        s_snap->title[0] = '\0';
+        s_snap->layout_generation++;
+    }
+    s_snap->status = HA_DASH_STATUS_ERROR;
+    strlcpy(s_snap->message, message, sizeof(s_snap->message));
+    xSemaphoreGive(s_lock);
+    notify_changed();
+}
+
+static const char *dashboard_label(void)
+{
+    return s_cfg.dashboard[0] ? s_cfg.dashboard : "default";
+}
+
 static void apply_config(const cJSON *result)
 {
     ha_dash_snapshot_t *next = dash_alloc(sizeof(*next));
@@ -286,7 +325,14 @@ static void apply_config(const cJSON *result)
     int count = ha_dash_layout_parse(result, next);
     if (count < 0) {
         free(next);
-        set_status(HA_DASH_STATUS_ERROR, "The dashboard has no views");
+        char message[HA_DASH_MESSAGE_LEN];
+        if (cJSON_GetObjectItemCaseSensitive(result, "strategy")) {
+            snprintf(message, sizeof(message), "\"%s\" is auto-generated; take control of it in HA",
+                     dashboard_label());
+        } else {
+            snprintf(message, sizeof(message), "\"%s\" has no views", dashboard_label());
+        }
+        show_error(message);
         return;
     }
 
@@ -303,7 +349,10 @@ static void apply_config(const cJSON *result)
     xSemaphoreGive(s_lock);
     free(next);
 
-    ESP_LOGI(TAG, "dashboard '%s': %d tiles", s_cfg.dashboard, count);
+    ESP_LOGI(TAG, "dashboard '%s': %d tiles (internal RAM free %u, largest block %u)",
+             dashboard_label(), count,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     notify_changed();
     subscribe_entities();
 }
@@ -314,6 +363,13 @@ static void handle_result(const cJSON *msg, int id)
     if (cJSON_IsTrue(success)) {
         if (id == s_config_request_id) {
             apply_config(cJSON_GetObjectItemCaseSensitive(msg, "result"));
+        } else if (id == s_boards_request_id) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_snap->board_count = (uint8_t)ha_dash_parse_dashboards(
+                cJSON_GetObjectItemCaseSensitive(msg, "result"), s_snap->boards, HA_DASH_MAX_BOARDS);
+            s_snap->boards_revision++;
+            xSemaphoreGive(s_lock);
+            notify_changed();
         }
         return;
     }
@@ -326,13 +382,13 @@ static void handle_result(const cJSON *msg, int id)
     if (id == s_config_request_id) {
         char message[HA_DASH_MESSAGE_LEN];
         if (cJSON_IsString(code) && strcmp(code->valuestring, "config_not_found") == 0) {
-            snprintf(message, sizeof(message), "Dashboard \"%s\" not found",
-                     s_cfg.dashboard[0] ? s_cfg.dashboard : "default");
+            /* Also returned for dashboards that were never edited in HA. */
+            snprintf(message, sizeof(message), "\"%s\" has no saved cards", dashboard_label());
         } else {
             snprintf(message, sizeof(message), "%s",
                      cJSON_IsString(text) ? text->valuestring : "Could not load the dashboard");
         }
-        set_status(HA_DASH_STATUS_ERROR, message);
+        show_error(message);
     }
 }
 
@@ -381,6 +437,7 @@ static void handle_object(const cJSON *msg)
         s_authed = true;
         set_status(HA_DASH_STATUS_LOADING, "Loading dashboard");
         subscribe_lovelace_updates();
+        request_dashboards();
         request_config();
     } else if (strcmp(type, "auth_invalid") == 0) {
         ESP_LOGE(TAG, "access token rejected");
@@ -393,7 +450,8 @@ static void handle_message(char *text)
 {
     cJSON *root = cJSON_Parse(text);
     if (root == NULL) {
-        ESP_LOGW(TAG, "unparsable message (%u bytes)", (unsigned)strlen(text));
+        ESP_LOGW(TAG, "could not parse a %u-byte message (out of memory or invalid JSON)",
+                 (unsigned)strlen(text));
         return;
     }
     if (cJSON_IsArray(root)) { /* coalesced messages */
@@ -407,8 +465,44 @@ static void handle_message(char *text)
     cJSON_Delete(root);
 }
 
+static void select_dashboard(int index)
+{
+    char path[HA_DASH_PATH_LEN];
+    bool valid = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (index >= 0 && index < s_snap->board_count) {
+        strlcpy(path, s_snap->boards[index].url_path, sizeof(path));
+        strlcpy(s_snap->dashboard, path, sizeof(s_snap->dashboard));
+        valid = true;
+    }
+    xSemaphoreGive(s_lock);
+    if (!valid) {
+        return;
+    }
+
+    strlcpy(s_cfg.dashboard, path, sizeof(s_cfg.dashboard));
+    if (ha_dash_config_set(&s_cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "could not save the dashboard choice");
+    }
+    ESP_LOGI(TAG, "switching to dashboard '%s'", dashboard_label());
+    set_status(HA_DASH_STATUS_LOADING, "Loading dashboard");
+    request_config();
+}
+
 static void handle_action(const struct view_data_ha_dash_action *action)
 {
+    if (action->action == HA_DASH_ACTION_LIST_DASHBOARDS ||
+        action->action == HA_DASH_ACTION_SELECT_DASHBOARD) {
+        if (!s_authed) {
+            ESP_LOGW(TAG, "ignoring dashboard action: not connected");
+        } else if (action->action == HA_DASH_ACTION_LIST_DASHBOARDS) {
+            request_dashboards();
+        } else {
+            select_dashboard(action->value);
+        }
+        return;
+    }
+
     ha_dash_tile_t tile;
     bool valid = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -446,13 +540,18 @@ static void client_stop(void)
     s_entities_sub_id = 0;
     s_lovelace_sub_id = 0;
     s_config_request_id = 0;
+    s_boards_request_id = 0;
 }
 
 static void client_start(void)
 {
     client_stop();
 
-    if (ha_dash_config_get(&s_cfg) != ESP_OK) {
+    esp_err_t configured = ha_dash_config_get(&s_cfg);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(s_snap->dashboard, s_cfg.dashboard, sizeof(s_snap->dashboard));
+    xSemaphoreGive(s_lock);
+    if (configured != ESP_OK) {
         set_status(HA_DASH_STATUS_UNCONFIGURED, "Run setdash on the serial console");
         return;
     }
@@ -567,6 +666,9 @@ bool ha_dash_snapshot(ha_dash_snapshot_t *out)
 
 int ha_dash_init(void)
 {
+    cJSON_Hooks hooks = {.malloc_fn = json_alloc, .free_fn = free};
+    cJSON_InitHooks(&hooks);
+
     s_snap = dash_alloc(sizeof(*s_snap));
     s_lock = xSemaphoreCreateMutex();
     s_queue = xQueueCreate(DASH_QUEUE_LEN, sizeof(dash_item_t));
@@ -578,6 +680,7 @@ int ha_dash_init(void)
     ha_dash_config_t cfg;
     s_snap->status = ha_dash_config_get(&cfg) == ESP_OK ? HA_DASH_STATUS_WAITING_NETWORK
                                                         : HA_DASH_STATUS_UNCONFIGURED;
+    strlcpy(s_snap->dashboard, cfg.dashboard, sizeof(s_snap->dashboard));
     strlcpy(s_snap->message,
             s_snap->status == HA_DASH_STATUS_UNCONFIGURED ? "Run setdash on the serial console"
                                                           : "Waiting for Wi-Fi",

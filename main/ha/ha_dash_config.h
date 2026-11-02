@@ -10,7 +10,8 @@ extern "C" {
 /* Connection settings for the Home Assistant dashboard screen. Stored as
  * separate NVS keys, independent of the MQTT ha_cfg_interface blob. */
 
-#define HA_DASH_DEFAULT_DASHBOARD "touch-screen"
+/* Until one is picked on the device, show Home Assistant's default dashboard. */
+#define HA_DASH_DEFAULT_DASHBOARD ""
 
 typedef struct {
     char url[128];      /* ws://host:8123/api/websocket */

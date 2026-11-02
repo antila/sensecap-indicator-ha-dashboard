@@ -24,6 +24,10 @@ extern "C" {
  * fields are reset; status, message and layout_generation are left alone. */
 int ha_dash_layout_parse(const cJSON *config, ha_dash_snapshot_t *out);
 
+/* Fill out[] from the `result` array of `lovelace/dashboards/list`, followed
+ * by the default dashboard (url_path ""). Returns the number of entries. */
+int ha_dash_parse_dashboards(const cJSON *result, ha_dash_board_t *out, int max);
+
 /* Write a JSON array of the unique entity ids in the layout into buf.
  * Returns the string length, or -1 if buf is too small. */
 int ha_dash_layout_entity_ids_json(const ha_dash_snapshot_t *snap, char *buf, size_t len);

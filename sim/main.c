@@ -39,8 +39,8 @@ int main(void) {
     nav_init();
     indicator_display_view_init();
     indicator_wifi_view_init();
-    ha_dash_screen_create();
     settings_view_init();
+    ha_dash_screen_create();  /* fills the settings page's status slot */
     ha_dash_init();       /* stub: shows a fixed demo dashboard */
 
     const char *open_settings = getenv("SIM_OPEN_SETTINGS");

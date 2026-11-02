@@ -101,7 +101,7 @@ VIEW_FILE_PATTERNS = (
     re.compile(r"(^|/)sensor/sensor_view\.c$"),
     re.compile(r"(^|/)display/display_view\.c$"),
     re.compile(r"(^|/)settings/settings_view\.c$"),
-    re.compile(r"(^|/)lv_port\.[ch]$"),
+    re.compile(r"(^|/)lv_port(_mem)?\.[ch]$"),
     re.compile(r"(^|/)nav/nav\.[ch]$"),
     re.compile(r"(^|/)ui(/|$)"),
 )
