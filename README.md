@@ -18,9 +18,11 @@ Assistant.
 
 ## Features
 
+- Home Assistant dashboard mirror: the only screen shows a Lovelace dashboard
+  you edit in Home Assistant, with live state and tap/slider control
 - Wi-Fi and MQTT setup from the touchscreen
 - Temperature, humidity, CO₂, and tVOC publishing
-- Six binary controls and two numeric controls for Home Assistant
+- Six binary and two numeric MQTT controls (headless; no longer on screen)
 - MQTT state synchronization in both directions
 - NVS-backed Wi-Fi, MQTT, and control settings
 - Display brightness and sleep controls
@@ -132,6 +134,30 @@ The RP2040 firmware only needs rebuilding when its sensor or UART code changes:
 ./dev rp2040 monitor
 ```
 
+## Home Assistant dashboard
+
+The screen mirrors one Lovelace dashboard over Home Assistant's WebSocket
+API. Add cards to that dashboard in Home Assistant and they appear on the
+device; edits show up live.
+
+1. In Home Assistant, create a dashboard (e.g. URL `touch-screen`) and add
+   cards. Button, tile, entity, entities, glance, heading, stacks and grids are
+   read; only the first view is shown.
+2. Create a long-lived access token (profile → Security). A dedicated, non-admin
+   user is a good idea since the token is stored unencrypted on the device.
+3. On the serial console:
+
+   ```text
+   setdash -a 192.168.1.10 -t <token> -d touch-screen
+   dashconfig
+   ```
+
+Lights toggle on tap and get a brightness slider when dimmable; switches,
+input booleans, fans, covers, locks and media players toggle; scripts, scenes
+and buttons run; everything else is shown as a value. Fonts include Latin-1 and
+Latin Extended-A, so names such as "Kök" render correctly. To add icons or
+glyphs, edit and re-run `scripts/gen_dash_fonts.py`.
+
 ## Serial commands
 
 Connect to the ESP32-S3 console at 115200 baud.
@@ -144,6 +170,8 @@ Connect to the ESP32-S3 console at 115200 baud.
 | `setmqtt -a <addr> -c <client-id> -u <user> -p <pass>` | Set the complete broker configuration |
 | `setmqtt --insecure` / `--secure` | Skip / re-enable TLS server verification (mqtts only) |
 | `setmqttca` / `setmqttca -c` | Paste a CA certificate for `mqtts://`, or clear it |
+| `setdash -a <addr> -t <token> -d <dashboard>` | Set the Home Assistant dashboard connection |
+| `dashconfig` | Show the dashboard connection settings (token masked) |
 
 Examples:
 

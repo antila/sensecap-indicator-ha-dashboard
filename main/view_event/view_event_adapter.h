@@ -29,6 +29,8 @@ union view_event_payload_extent {
     struct view_data_ha_switch_data ha_switch;
     struct view_data_ha_switch_command ha_switch_command;
     struct view_data_ha_switch_publish_result ha_switch_publish_result;
+    struct view_data_ha_dash_changed ha_dash_changed;
+    struct view_data_ha_dash_action ha_dash_action;
 };
 
 #define VIEW_EVENT_MAX_PAYLOAD_SIZE sizeof(union view_event_payload_extent)

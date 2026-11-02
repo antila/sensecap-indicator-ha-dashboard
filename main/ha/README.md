@@ -15,9 +15,12 @@ each feature slice owns its full stack (data model + MQTT protocol + UI componen
 | `ha_tls.c` | ~85 | `mqtts://` trust configuration: verification mode + custom CA stored under separate NVS keys. UI-free. |
 | `ha_sensor.c` | ~128 | Sensor entity metadata, subscribes to sensor MQTT topics, publishes built-in sensor readings, routes incoming sensor JSON to `VIEW_EVENT_HA_SENSOR`. |
 | `ha_switch.c` | Switch entity metadata, in-memory authoritative state, MQTT publish/subscribe, and generation-tagged publish results. UI-free. |
-| `ha_switch_sync.c` | Pure generation/debounce/result state module. Owns stale-result filtering and rollback decisions. |
-| `ha_switch_screen.c` | Builds and owns all 8 switch widgets, LVGL timers, and direct subscriptions to model state/publish results. |
-| `ha_switch_screen.h` | Single idempotent `create` interface. |
+| `ha_switch_sync.c` | Pure generation/debounce/result state module. Owns stale-result filtering and rollback decisions. Currently has no on-screen user. |
+| `ha_dash.c` | Dashboard mirror model: Home Assistant WebSocket client, auth, `lovelace/config`, `subscribe_entities`, `call_service`. Owns the snapshot behind a mutex. UI-free. |
+| `ha_dash_config.c` | Dashboard URL, access token and dashboard path under their own NVS keys. |
+| `ha_dash_layout.c` | Pure cJSON helpers: Lovelace config to tiles, entity state updates, service-call messages, URL normalization. Host-tested. |
+| `ha_dash_present.c` | Pure icon/state-text helpers for tiles. Host-tested. |
+| `ha_dash_screen.c` | Builds the dashboard page on `NAV_TILE_HA_DASH` from snapshots; posts tap/slider actions. |
 
 ---
 
@@ -26,8 +29,8 @@ each feature slice owns its full stack (data model + MQTT protocol + UI componen
 ```
 indicator_ha_view_init()    (called from indicator_view.c)
   ha_config_view_init()     register VIEW_EVENT_MQTT_ADDR_CHANGED + VIEW_EVENT_HA_ADDR_DISPLAY
-  ha_switch_screen_create() builds switch widgets on NAV_TILE_HA_CTRL and NAV_TILE_HA_MIX
-                            subscribe to HA switch model state + publish results
+  ha_dash_screen_create()   builds the dashboard page on NAV_TILE_HA_DASH,
+                            subscribes to VIEW_EVENT_HA_DASH_CHANGED
 
 indicator_ha_model_init()   (called later from indicator_model.c)
   ha_sensor_init()          register VIEW_EVENT_SENSOR_DATA handler
@@ -36,6 +39,8 @@ indicator_ha_model_init()   (called later from indicator_model.c)
   create ha_cfg_event_handle
   init mqtt_ha_instance
   register VIEW_EVENT_WIFI_ST handler
+  ha_dash_init()            start the dashboard worker task, register
+                            VIEW_EVENT_WIFI_ST + VIEW_EVENT_HA_DASH_ACTION
 ```
 
 ---
@@ -43,21 +48,11 @@ indicator_ha_model_init()   (called later from indicator_model.c)
 ## Event Flows
 
 ```
-User changes a switch widget
-  → ha_switch_screen.c: LV_EVENT_VALUE_CHANGED
-  → toggle publishes immediately; arc/slider debounce for 200 ms
-  → post VIEW_EVENT_HA_SWITCH_ST {index, value, generation}
-  → ha_switch.c: publish to MQTT topic_state
-  → update in-memory controller state on client acceptance
-  → post VIEW_EVENT_HA_SWITCH_PUBLISH_RESULT
-  → screen confirms or rolls back the matching generation
-
 MQTT broker sends switch command
   → ha_mqtt.c: MQTT_EVENT_DATA
   → ha_switch_on_mqtt_data()
   → update latest in-memory model value
-  → publish keyed VIEW_EVENT_HA_SWITCH_SET {index, value}
-  → ha_switch_screen.c cancels local timers and applies under LVGL lock
+  → publish keyed VIEW_EVENT_HA_SWITCH_SET {index, value} (no on-screen consumer)
 
 WiFi connects
   → VIEW_EVENT_WIFI_ST {is_network=true}
@@ -70,6 +65,23 @@ MQTT connects
   → ha_sensor_subscribe() — subscribe to sensor topics
   → ha_switch_subscribe() — subscribe to switch topics, start restore task
 
+Dashboard connects (WebSocket, independent of MQTT)
+  → VIEW_EVENT_WIFI_ST {is_network=true} → ha_dash.c worker starts the client
+  → auth with the long-lived token from `setdash`
+  → lovelace/config for the configured dashboard → ha_dash_layout_parse()
+  → subscribe_entities for the entities on it; subscribe to lovelace_updated
+  → every snapshot change publishes VIEW_EVENT_HA_DASH_CHANGED (one coalesced slot)
+  → ha_dash_screen.c copies the snapshot under the LVGL lock, rebuilds on a new
+    layout_generation, otherwise updates only tiles whose revision changed
+
+User taps a dashboard tile or releases a light slider
+  → ha_dash_screen.c posts VIEW_EVENT_HA_DASH_ACTION {layout_generation, index, action, value}
+  → ha_dash.c drops it if the layout changed meanwhile, else sends call_service
+  → Home Assistant's state change comes back through subscribe_entities
+
+Dashboard edited in Home Assistant
+  → lovelace_updated event for our url_path → refetch config, carry live state over
+
 User changes broker IP
   → ha_config.c: posts VIEW_EVENT_MQTT_ADDR_CHANGED
   → ha_config.c: validates, saves NVS, posts HA_CFG_BROKER_CHANGED
@@ -80,16 +92,9 @@ User changes broker IP
 
 ## Known Issues
 
-- `VIEW_EVENT_HA_SENSOR` is posted by `ha_sensor.c` but **has no consumer**. The HA sensor data display screen is not yet wired up. See the manifest comment in `view_data.h`.
+- The only screen is the dashboard mirror (`ha_dash_screen.c`). The MQTT sensor and switch slices still run, but `VIEW_EVENT_HA_SENSOR` and `VIEW_EVENT_HA_SWITCH_SET` have no on-screen consumer.
 
 ---
-
-## Adding a New Switch Widget Type
-
-1. Add a new `_update_xxx()` function in `ha_switch_screen.c`
-2. Add a slot entry in `ha_switch_screen_create()` pointing to the locally-created widget and updater
-3. Extend `CONFIG_HA_SWITCH_ENTITY_NUM` in `home_assistant_config.h` if adding a new entity
-4. Choose immediate or debounced input semantics explicitly
 
 ## Extending to a New Feature Slice
 

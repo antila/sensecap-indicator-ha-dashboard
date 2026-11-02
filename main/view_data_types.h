@@ -154,6 +154,21 @@ struct view_data_ha_switch_publish_result {
     bool     accepted;
 };
 
+/* ── Home Assistant dashboard ─────────────────────────────────────────────── */
+
+/* Coalesced "something changed" notification. The screen reads the full
+ * dashboard through ha_dash_snapshot() rather than through the event. */
+struct view_data_ha_dash_changed {
+    uint32_t layout_generation;
+};
+
+struct view_data_ha_dash_action {
+    uint32_t layout_generation; /* stale actions for an old layout are dropped */
+    uint8_t  index;             /* tile index in the snapshot */
+    uint8_t  action;            /* ha_dash_action_t */
+    int16_t  value;             /* brightness percent for HA_DASH_ACTION_SET_LEVEL */
+};
+
 /* ── View-event interface contract ───────────────────────────────────────── */
 
 /*
@@ -201,6 +216,8 @@ enum view_event_id {
     VIEW_EVENT_HA_SWITCH_ST,             // struct view_data_ha_switch_command; command
     VIEW_EVENT_HA_SWITCH_SET,            // struct view_data_ha_switch_data; keyed state
     VIEW_EVENT_HA_SWITCH_PUBLISH_RESULT, // struct view_data_ha_switch_publish_result; command result
+    VIEW_EVENT_HA_DASH_CHANGED,          // struct view_data_ha_dash_changed; state
+    VIEW_EVENT_HA_DASH_ACTION,           // struct view_data_ha_dash_action; command
 
     VIEW_EVENT_ALL,
 };

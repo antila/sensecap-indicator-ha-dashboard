@@ -52,7 +52,7 @@ class UiGeometryTests(unittest.TestCase):
         nav_header = NAV_HEADER.read_text()
         settings_text = SETTINGS_VIEW.read_text()
 
-        self.assertIn("#define NAV_TILE_COUNT    3", nav_header)
+        self.assertIn("#define NAV_TILE_COUNT    1", nav_header)
         self.assertNotIn("NAV_TILE_SETTINGS", nav_header)
         self.assertIn("LV_SYMBOL_SETTINGS", settings_text)
         self.assertIn("lv_obj_set_align(button, LV_ALIGN_TOP_LEFT)", settings_text)

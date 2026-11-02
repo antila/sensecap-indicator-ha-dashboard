@@ -41,9 +41,9 @@ main/
 
 域的文件命名因域而异，没有统一的 `<domain>_view.c` 规律。实际示例：
 ```
-main/ha/        ha.h, ha_mqtt.c, ha_sensor.c, ha_switch_screen.c, ha_config.c
+main/ha/        ha.h, ha_mqtt.c, ha_sensor.c, ha_dash.c, ha_dash_screen.c, ha_config.c
 main/wifi/      wifi.h, wifi_model.c, wifi_view.c, wifi_list_screen.c, wifi_connect_screen.c
-main/sensor/    sensor_model.h, sensor_model.c, sensor_view.h, sensor_view.c
+main/sensor/    sensor_model.h, sensor_model.c
 main/display/   display.h, display_model.c, display_view.h, display_view.c
 main/nav/       nav.h, nav.c
 main/assets/    ui_img_*.c, ui_font_*.c（图像/字体资源）
@@ -54,14 +54,12 @@ main/assets/    ui_img_*.c, ui_font_*.c（图像/字体资源）
 
 ## 导航系统
 
-主屏使用 `lv_tileview`，横向滑动，当前 3 个 tile：
+主屏使用 `lv_tileview`，横向滑动，当前只有 1 个 tile：
 
 ```c
 // main/nav/nav.h
-#define NAV_TILE_HA_DATA  0   // 传感器数据页
-#define NAV_TILE_HA_CTRL  1   // HA 开关控制页
-#define NAV_TILE_HA_MIX   2   // HA 混合控件页（弧形/滑块）
-#define NAV_TILE_COUNT    3
+#define NAV_TILE_HA_DASH  0   // HA 仪表盘镜像（WebSocket API）
+#define NAV_TILE_COUNT    1
 ```
 
 弹窗/设置使用 `lv_layer_top()` 作为父容器（悬浮在 tileview 之上）。
@@ -74,8 +72,8 @@ main/assets/    ui_img_*.c, ui_font_*.c（图像/字体资源）
 
 **Step 1** — `main/nav/nav.h` 增加常量（两处都要改）：
 ```c
-#define NAV_TILE_MY_PAGE  3
-#define NAV_TILE_COUNT    4   // ← 必须同步 +1，否则 tile 显示空白
+#define NAV_TILE_MY_PAGE  1
+#define NAV_TILE_COUNT    2   // ← 必须同步 +1，否则 tile 显示空白
 ```
 
 **Step 2** — `main/CMakeLists.txt` 的 `DIRECTORIES_TO_INCLUDE` 列表加入新目录：

@@ -7,6 +7,7 @@
  *   ha_mqtt.h    — MQTT lifecycle, event loops, HA_CFG_EVENT
  *   ha_sensor.h  — sensor entity and MQTT routing
  *   ha_switch.h  — switch entity, MQTT routing, screen attachment
+ *   ha_dash.h    — dashboard mirror over the Home Assistant WebSocket API
  */
 #include "view_data.h"
 #include "ha_config.h"

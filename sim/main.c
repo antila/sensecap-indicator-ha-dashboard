@@ -17,10 +17,10 @@
 /* View init functions — called directly instead of via indicator_view.c */
 #include "nav/nav.h"
 #include "display/display_view.h"
-#include "sensor/sensor_view.h"
 #include "settings/settings_view.h"
 #include "wifi/wifi_view.h"
-#include "ha/ha_switch_screen.h"
+#include "ha/ha_dash.h"
+#include "ha/ha_dash_screen.h"
 
 #include "mock/mock_sensors.h"
 
@@ -38,10 +38,10 @@ int main(void) {
     /* 2. Init view layer (hardware-free UI domains) */
     nav_init();
     indicator_display_view_init();
-    view_sensor_init();
     indicator_wifi_view_init();
-    ha_switch_screen_create();
+    ha_dash_screen_create();
     settings_view_init();
+    ha_dash_init();       /* stub: shows a fixed demo dashboard */
 
     const char *open_settings = getenv("SIM_OPEN_SETTINGS");
     if (open_settings && *open_settings) {

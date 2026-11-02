@@ -49,7 +49,6 @@ app_main()
   4. indicator_view_init()
        nav_init()
        → indicator_display_view_init
-       → view_sensor_init
        → indicator_wifi_view_init
        → indicator_ha_view_init
   5. indicator_model_init()
@@ -105,6 +104,21 @@ handler call.
 The full producer/consumer/payload/policy manifest is in
 `docs/stability/milestone-1-event-reliability.md`.
 
+## Home Assistant dashboard mirror
+
+The first tile (`NAV_TILE_HA_DASH`) mirrors a Lovelace dashboard over Home
+Assistant's WebSocket API, separate from the MQTT controls:
+
+- `VIEW_EVENT_HA_DASH_CHANGED` is singleton replaceable state carrying only the
+  layout generation. The screen reads the full snapshot through
+  `ha_dash_snapshot()`, so any number of tiles share one state slot.
+- `VIEW_EVENT_HA_DASH_ACTION` is a command tagged with the layout generation it
+  was made against; the model drops actions for a replaced layout.
+
+`ha_dash.c` owns the WebSocket client and a single worker task that is the only
+sender. Parsing and message building live in the pure `ha_dash_layout.c` and
+`ha_dash_present.c`, covered by `scripts/test_ha_dash.py`.
+
 ## Home Assistant switch synchronization
 
 The HA switch slice separates local intent, authoritative model state, and
@@ -117,16 +131,13 @@ publication results:
 
 `ha_switch_sync` is the pure in-process module at the synchronization seam. It
 owns generations, debounce state, accepted values, stale-result filtering, and
-rollback decisions. `ha_switch_screen.c` adapts those actions to LVGL widgets
-and one-shot timers. Toggle input publishes immediately; arc and slider input
-uses a 200 ms quiet-period debounce. Model state cancels pending local timers
-and is applied with command emission suppressed.
+rollback decisions. The MQTT switch screens that used it were removed in
+favour of the dashboard mirror; the MQTT switch model still runs headless, so
+Home Assistant can keep using the `indicator/switch/*` topics.
 
 `ha_switch.c` owns MQTT protocol and NVS state only. It does not include LVGL,
 hold a screen pointer, or acquire the LVGL lock. A local publish is confirmed
-only when ESP-MQTT accepts it with a non-negative message id; otherwise the
-screen receives an explicit rejection or rolls back after its 2 second result
-timeout.
+only when ESP-MQTT accepts it with a non-negative message id.
 
 The detailed contract and host scenarios are in
 `docs/stability/milestone-2-ha-state-sync.md`.

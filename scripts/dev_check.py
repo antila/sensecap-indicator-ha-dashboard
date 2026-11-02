@@ -43,6 +43,7 @@ def main() -> int:
     run("LVGL health diagnostics", ["python3", "scripts/test_lvgl_health.py"])
     run("HA switch synchronization", ["python3", "scripts/test_ha_switch_sync.py"])
     run("HA switch protocol", ["python3", "scripts/test_ha_switch_protocol.py"])
+    run("HA dashboard", ["python3", "scripts/test_ha_dash.py"])
     run("RP2040 protocol constants", ["python3", "scripts/verify_rp2040_protocol.py"])
 
     if not args.skip_build:

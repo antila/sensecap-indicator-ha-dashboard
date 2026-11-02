@@ -90,6 +90,8 @@ static const struct view_event_descriptor s_descriptors[VIEW_EVENT_ALL] = {
         struct view_data_ha_switch_data, VIEW_EVENT_KEY_HA_SWITCH_INDEX),
     [VIEW_EVENT_HA_SWITCH_PUBLISH_RESULT] =
         COMMAND(struct view_data_ha_switch_publish_result),
+    [VIEW_EVENT_HA_DASH_CHANGED] = STATE(struct view_data_ha_dash_changed),
+    [VIEW_EVENT_HA_DASH_ACTION] = COMMAND(struct view_data_ha_dash_action),
 };
 
 #undef COMMAND

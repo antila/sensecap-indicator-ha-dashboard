@@ -6,6 +6,9 @@
 #include "home_assistant_config.h"
 #include "ha.h"
 #include "ha_tls.h"
+#include "ha_dash.h"
+#include "ha_dash_config.h"
+#include "ha_dash_layout.h"
 #include "storage_nvs.h"
 #include "indicator_util.h"
 #include <ctype.h>
@@ -310,6 +313,129 @@ static void register_mqtt_ca(void) {
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
+static void print_dash_usage(void) {
+    printf("\nHome Assistant dashboard\n");
+    printf("  The first screen mirrors a Lovelace dashboard over the WebSocket API.\n\n");
+    printf("  Set address, token and dashboard:\n");
+    printf("    setdash -a 192.168.1.10 -t <long-lived-token> -d touch-screen\n");
+    printf("    setdash -a https://example.ui.nabu.casa\n");
+    printf("    setdash -d default        (Home Assistant's default dashboard)\n\n");
+    printf("  Show current settings:\n");
+    printf("    dashconfig\n\n");
+    printf("  Notes:\n");
+    printf("    - A bare host uses port 8123. The dashboard is its URL path, e.g.\n");
+    printf("      'touch-screen' for http://ha:8123/touch-screen.\n");
+    printf("    - Create the token under your Home Assistant profile -> Security.\n");
+    printf("      It is stored unencrypted on the device; a dedicated user is safer.\n\n");
+}
+
+static int dash_config_show(int argc, char **argv) {
+    ha_dash_config_t cfg;
+    ha_dash_config_get(&cfg);
+    char token[48];
+    if (cfg.token[0]) {
+        snprintf(token, sizeof(token), "**** (%u chars)", (unsigned)strlen(cfg.token));
+    } else {
+        snprintf(token, sizeof(token), "(not set)");
+    }
+    ESP_LOGI(TAG, "| Home Assistant URL           | %-40s |", cfg.url[0] ? cfg.url : "(not set)");
+    ESP_LOGI(TAG, "| Access token                 | %-40s |", token);
+    ESP_LOGI(TAG, "| Dashboard                    | %-40s |", cfg.dashboard[0] ? cfg.dashboard : "(default)");
+    return 0;
+}
+
+static void register_dash_show(void) {
+    const esp_console_cmd_t cmd = {
+        .command = "dashconfig",
+        .help    = "Show the Home Assistant dashboard connection settings",
+        .hint    = NULL,
+        .func    = &dash_config_show,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+struct {
+    struct arg_str *addr;
+    struct arg_str *token;
+    struct arg_str *dashboard;
+    struct arg_end *end;
+} dash_args;
+
+static int dash_config_set(int argc, char **argv) {
+    int nerrors = arg_parse(argc, argv, (void **)&dash_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, dash_args.end, argv[0]);
+        print_dash_usage();
+        return 1;
+    }
+    if (!dash_args.addr->count && !dash_args.token->count && !dash_args.dashboard->count) {
+        print_dash_usage();
+        return dash_config_show(0, NULL);
+    }
+
+    ha_dash_config_t cfg;
+    ha_dash_config_get(&cfg);
+
+    if (dash_args.addr->count > 0) {
+        if (!ha_dash_websocket_url(dash_args.addr->sval[0], cfg.url, sizeof(cfg.url))) {
+            ESP_LOGE(TAG, "Invalid or too long address: %s", dash_args.addr->sval[0]);
+            return 1;
+        }
+        ESP_LOGI(TAG, "Set Home Assistant URL: %s", cfg.url);
+    }
+    if (dash_args.token->count > 0) {
+        if (strlen(dash_args.token->sval[0]) >= sizeof(cfg.token)) {
+            ESP_LOGE(TAG, "Token is longer than %u characters", (unsigned)sizeof(cfg.token) - 1);
+            return 1;
+        }
+        strlcpy(cfg.token, dash_args.token->sval[0], sizeof(cfg.token));
+        ESP_LOGI(TAG, "Set access token: **** (%u chars)", (unsigned)strlen(cfg.token));
+    }
+    if (dash_args.dashboard->count > 0) {
+        const char *path = dash_args.dashboard->sval[0];
+        if (strcmp(path, "default") == 0 || strcmp(path, "lovelace") == 0) {
+            path = "";
+        }
+        if (strlen(path) >= sizeof(cfg.dashboard)) {
+            ESP_LOGE(TAG, "Dashboard path is too long");
+            return 1;
+        }
+        strlcpy(cfg.dashboard, path, sizeof(cfg.dashboard));
+        ESP_LOGI(TAG, "Set dashboard: %s", cfg.dashboard[0] ? cfg.dashboard : "(default)");
+    }
+
+    if (ha_dash_config_set(&cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save dashboard configuration");
+        return 1;
+    }
+    if (!cfg.url[0] || !cfg.token[0]) {
+        ESP_LOGW(TAG, "Saved. Still needed: %s%s", cfg.url[0] ? "" : "-a <address> ",
+                 cfg.token[0] ? "" : "-t <token>");
+        return 0;
+    }
+    ha_dash_reload();
+    ESP_LOGI(TAG, "Dashboard configuration saved. Reconnecting.");
+    return 0;
+}
+
+static void register_dash_config(void) {
+    dash_args.addr      = arg_str0("a", "addr", "<address>",
+                                   "Home Assistant address, e.g. 192.168.1.10, ha.local:8123 or https://host");
+    dash_args.token     = arg_str0("t", "token", "<token>", "Long-lived access token");
+    dash_args.dashboard = arg_str0("d", "dashboard", "<url_path>",
+                                   "Dashboard URL path, e.g. touch-screen; 'default' for the default dashboard");
+    dash_args.end       = arg_end(4);
+
+    const esp_console_cmd_t cmd = {
+        .command  = "setdash",
+        .help     = "Set the Home Assistant dashboard connection. Example: setdash -a 192.168.1.10 -t <token> -d touch-screen",
+        .hint     = NULL,
+        .func     = &dash_config_set,
+        .argtable = &dash_args,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 int indicator_cmd_init(void) {
     esp_console_repl_t       *repl        = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
@@ -330,6 +456,8 @@ int indicator_cmd_init(void) {
     register_mqtt_help();
     register_mqtt_config();
     register_mqtt_ca();
+    register_dash_show();
+    register_dash_config();
 
     esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw_config, &repl_config, &repl));

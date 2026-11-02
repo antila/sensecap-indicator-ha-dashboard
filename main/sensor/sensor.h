@@ -6,6 +6,5 @@
  *   sensor_view.h  — LVGL label subscriptions
  */
 #include "sensor_model.h"
-#include "sensor_view.h"
 
 #endif /* SENSOR_H */

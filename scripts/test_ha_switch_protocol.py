@@ -102,68 +102,13 @@ class TestSwitchPublish(unittest.TestCase):
         self.assertIsNone(format_switch_publish(8, 1))
 
 
-class TestSwitchScreenDeliveryState(unittest.TestCase):
-    def setUp(self):
-        self.source = (
-            ROOT / "main" / "ha" / "ha_switch_screen.c"
-        ).read_text(encoding="utf-8")
-        self.header = (
-            ROOT / "main" / "ha" / "ha_switch_screen.h"
-        ).read_text(encoding="utf-8")
-
-    def test_screen_owns_model_and_publish_result_subscriptions(self):
-        self.assertNotIn("ha_switch_screen_update", self.header)
-        self.assertIn("VIEW_EVENT_HA_SWITCH_SET", self.source)
-        self.assertIn(
-            "VIEW_EVENT_HA_SWITCH_PUBLISH_RESULT", self.source
-        )
-        self.assertGreaterEqual(
-            self.source.count("view_event_subscribe("), 2
-        )
-        handler = self.source.split(
-            "static void _view_event_handler", 1
-        )[1].split("\n}", 1)[0]
-        self.assertIn("lv_port_sem_take();", handler)
-        self.assertIn("lv_port_sem_give();", handler)
-
-    def test_continuous_controls_are_debounced_but_toggles_are_immediate(self):
-        self.assertIn("#define HA_SWITCH_DEBOUNCE_MS 200", self.source)
-        toggle = self.source.split(
-            "static void _switch_toggle_event_cb", 1
-        )[1].split("\n}", 1)[0]
-        arc = self.source.split(
-            "static void _arc_event_cb", 1
-        )[1].split("\n}", 1)[0]
-        slider = self.source.split(
-            "static void _slider_event_cb", 1
-        )[1].split("\n}", 1)[0]
-        self.assertIn("HA_SWITCH_SYNC_IMMEDIATE", toggle)
-        self.assertIn("HA_SWITCH_SYNC_DEBOUNCED", arc)
-        self.assertIn("HA_SWITCH_SYNC_DEBOUNCED", slider)
-        self.assertIn("lv_timer_reset", self.source)
-        self.assertIn("ha_switch_sync_debounce_elapsed", self.source)
-
-    def test_model_updates_and_results_use_generation_state(self):
-        self.assertIn("ha_switch_sync_t sync;", self.source)
-        self.assertNotIn("int accepted_value;", self.source)
-        self.assertIn("bool suppress_post;", self.source)
-        self.assertIn("ha_switch_sync_model_changed", self.source)
-        self.assertIn("ha_switch_sync_publish_result", self.source)
-        self.assertIn("#define HA_SWITCH_RESULT_TIMEOUT_MS 2000", self.source)
-        self.assertIn("_cancel_debounce_timer(slot);", self.source)
-        self.assertIn("_cancel_result_timer(slot);", self.source)
-
-
 class TestSwitchEventContract(unittest.TestCase):
-    def test_controller_and_screen_cold_start_at_zero(self):
+    def test_controller_cold_starts_at_zero(self):
         config = (
             ROOT / "main" / "home_assistant_config.h"
         ).read_text(encoding="utf-8")
         controller = (
             ROOT / "main" / "ha" / "ha_switch.c"
-        ).read_text(encoding="utf-8")
-        screen = (
-            ROOT / "main" / "ha" / "ha_switch_screen.c"
         ).read_text(encoding="utf-8")
 
         defaults = config.split(
@@ -179,17 +124,6 @@ class TestSwitchEventContract(unittest.TestCase):
         self.assertIn(
             "static int switch_state[CONFIG_HA_SWITCH_ENTITY_NUM];",
             controller,
-        )
-        self.assertIn(
-            "static const int "
-            "switch_defaults[CONFIG_HA_SWITCH_ENTITY_NUM] =\n"
-            "    CONFIG_SWITCH_DEFAULT_VALUES;",
-            screen,
-        )
-        self.assertIn(
-            "ha_switch_sync_init(\n"
-            "        &slot->sync, switch_defaults[slot->index]);",
-            screen,
         )
 
     def test_controller_publishes_initial_zero_state_without_a_broker_or_nvs(self):

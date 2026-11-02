@@ -12,10 +12,6 @@ int indicator_view_init(void) {
 	indicator_display_view_init();
 #endif
 
-#ifdef SENSOR_H
-	view_sensor_init();
-#endif
-
 #ifdef WIFI_H
 	indicator_wifi_view_init();
 #endif

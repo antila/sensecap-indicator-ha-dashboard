@@ -2,7 +2,8 @@
 #include <string.h>
 
 #include "ha.h"
-#include "ha_switch_screen.h"
+#include "ha_dash.h"
+#include "ha_dash_screen.h"
 #include "ha_tls.h"
 #include "home_assistant_config.h"
 #include "mqtt.h"
@@ -234,12 +235,13 @@ int indicator_ha_model_init(void)
     ESP_ERROR_CHECK(view_event_subscribe(
         VIEW_EVENT_WIFI_ST, view_event_handler, NULL) ? ESP_OK : ESP_FAIL);
     view_event_publish_state(VIEW_EVENT_HA_ADDR_DISPLAY, NULL, 0);
+    ha_dash_init();
     return ESP_OK;
 }
 
 int indicator_ha_view_init(void)
 {
     ha_config_view_init();
-    ha_switch_screen_create();
+    ha_dash_screen_create();
     return ESP_OK;
 }

@@ -127,14 +127,9 @@ int ha_sensor_on_mqtt_data(const char *topic, int topic_len, const char *data, i
                  * pushed from Home Assistant over MQTT, with no physical sensor
                  * attached to the device (the use case in issue #5).
                  *
-                 * To wire it up:
-                 *   1. ha_switch_screen.c::_create_sensor_card already builds the
-                 *      "N/A" data labels on NAV_TILE_HA_MIX but discards the handle.
-                 *      Store each label keyed by card index (cf. the switch_slot_t
-                 *      pattern).
-                 *   2. Register a VIEW_EVENT_HA_SENSOR handler that, under the LVGL
-                 *      lock, does lv_label_set_text(labels[data->index], data->value).
-                 *   3. Make sensor_data.index here map to the intended card slot.
+                 * The dashboard screen (ha_dash_screen.c) now shows any Home
+                 * Assistant entity directly over the WebSocket API, so this MQTT
+                 * path has no on-screen consumer.
                  */
                 view_event_publish_state(
                     VIEW_EVENT_HA_SENSOR, &sensor_data, sizeof(sensor_data));
