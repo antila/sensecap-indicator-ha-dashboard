@@ -13,6 +13,8 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
+#include "ha_dash_auth.h"
 #include "ha_dash_config.h"
 #include "ha_dash_layout.h"
 #include "view_event.h"
@@ -33,11 +35,19 @@ typedef enum {
     DASH_ITEM_DISCONNECTED,
     DASH_ITEM_MESSAGE,
     DASH_ITEM_ACTION,
+    DASH_ITEM_LOGIN,
 } dash_item_kind_t;
 
 typedef struct {
+    char address[128];
+    char username[64];
+    char password[64];
+} dash_login_t;
+
+typedef struct {
     dash_item_kind_t kind;
-    char *text; /* DASH_ITEM_MESSAGE, owned by the receiver */
+    char *text;          /* DASH_ITEM_MESSAGE, owned by the receiver */
+    dash_login_t *login; /* DASH_ITEM_LOGIN, owned by the receiver */
     struct view_data_ha_dash_action action;
 } dash_item_t;
 
@@ -57,6 +67,13 @@ static int s_config_request_id;
 static int s_entities_sub_id;
 static int s_lovelace_sub_id;
 static int s_boards_request_id;
+
+/* Access token minted from the refresh token of a username/password login. */
+#define DASH_ACCESS_TOKEN_LEN 512
+#define DASH_TOKEN_MARGIN_US  (60LL * 1000 * 1000)
+static char s_access_token[DASH_ACCESS_TOKEN_LEN];
+static int64_t s_access_expires_us;
+static int s_auth_failures;
 
 /* WebSocket-task state: reassembly of a message split over several events. */
 static char *s_rx_buf;
@@ -84,6 +101,16 @@ static void notify_changed(void)
     changed.layout_generation = s_snap->layout_generation;
     xSemaphoreGive(s_lock);
     view_event_publish_state(VIEW_EVENT_HA_DASH_CHANGED, &changed, sizeof(changed));
+}
+
+/* Copy server and username from s_cfg into the snapshot (no notify). */
+static void snapshot_connection(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    strlcpy(s_snap->dashboard, s_cfg.dashboard, sizeof(s_snap->dashboard));
+    ha_dash_server_label(s_cfg.url, s_snap->server, sizeof(s_snap->server));
+    strlcpy(s_snap->username, s_cfg.refresh_token[0] ? s_cfg.username : "", sizeof(s_snap->username));
+    xSemaphoreGive(s_lock);
 }
 
 static void set_status(ha_dash_status_t status, const char *message)
@@ -193,11 +220,45 @@ static bool send_text(const char *text)
     return true;
 }
 
+static void client_stop(void);
+
+/* With a username/password login, mint a fresh access token when needed.
+ * Returns false when there is no usable token. */
+static bool ensure_access_token(void)
+{
+    if (s_cfg.refresh_token[0] == '\0') {
+        return true; /* long-lived token */
+    }
+    if (s_access_token[0] && esp_timer_get_time() < s_access_expires_us - DASH_TOKEN_MARGIN_US) {
+        return true;
+    }
+
+    char error[HA_DASH_MESSAGE_LEN];
+    int expires_in = 0;
+    esp_err_t err = ha_dash_auth_refresh(s_cfg.url, s_cfg.refresh_token, s_access_token,
+                                         sizeof(s_access_token), &expires_in, error, sizeof(error));
+    if (err == ESP_OK) {
+        s_access_expires_us = esp_timer_get_time() + (int64_t)expires_in * 1000 * 1000;
+        return true;
+    }
+    s_access_token[0] = '\0';
+    if (err == ESP_ERR_INVALID_STATE) {
+        client_stop(); /* the refresh token was revoked; only a new login helps */
+        set_status(HA_DASH_STATUS_AUTH_FAILED, error);
+    } else {
+        set_status(HA_DASH_STATUS_CONNECTING, error); /* retried on the next connect */
+    }
+    return false;
+}
+
 static void send_auth(void)
 {
+    if (!ensure_access_token()) {
+        return;
+    }
     cJSON *msg = cJSON_CreateObject();
     cJSON_AddStringToObject(msg, "type", "auth");
-    cJSON_AddStringToObject(msg, "access_token", s_cfg.token);
+    cJSON_AddStringToObject(msg, "access_token", s_cfg.refresh_token[0] ? s_access_token : s_cfg.token);
     char *text = cJSON_PrintUnformatted(msg);
     cJSON_Delete(msg);
     if (text) {
@@ -415,8 +476,6 @@ static void handle_event(const cJSON *msg, int id)
     }
 }
 
-static void client_stop(void);
-
 static void handle_object(const cJSON *msg)
 {
     const cJSON *type_item = cJSON_GetObjectItemCaseSensitive(msg, "type");
@@ -435,14 +494,22 @@ static void handle_object(const cJSON *msg)
         ESP_LOGI(TAG, "authenticated with Home Assistant %s",
                  cJSON_IsString(version) ? version->valuestring : "");
         s_authed = true;
+        s_auth_failures = 0;
         set_status(HA_DASH_STATUS_LOADING, "Loading dashboard");
         subscribe_lovelace_updates();
         request_dashboards();
         request_config();
     } else if (strcmp(type, "auth_invalid") == 0) {
         ESP_LOGE(TAG, "access token rejected");
+        if (s_cfg.refresh_token[0] && s_auth_failures++ == 0) {
+            /* Possibly just expired: mint a new one on the automatic reconnect. */
+            s_access_token[0] = '\0';
+            set_status(HA_DASH_STATUS_CONNECTING, "Signing in again");
+            return;
+        }
         client_stop(); /* retrying with the same token would only fail again */
-        set_status(HA_DASH_STATUS_AUTH_FAILED, "Access token rejected");
+        set_status(HA_DASH_STATUS_AUTH_FAILED,
+                   s_cfg.refresh_token[0] ? "Signed out; sign in again" : "Access token rejected");
     }
 }
 
@@ -528,6 +595,64 @@ static void handle_action(const struct view_data_ha_dash_action *action)
     }
 }
 
+static void client_start(void);
+
+static void login_result(bool ok, const char *message)
+{
+    if (ok) {
+        ESP_LOGI(TAG, "sign-in: %s", message);
+    } else {
+        ESP_LOGW(TAG, "sign-in failed: %s", message);
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_snap->login_ok = ok;
+    strlcpy(s_snap->login_message, message, sizeof(s_snap->login_message));
+    s_snap->login_revision++;
+    xSemaphoreGive(s_lock);
+    notify_changed();
+}
+
+static void handle_login(dash_login_t *login)
+{
+    ha_dash_config_t cfg;
+    ha_dash_config_get(&cfg);
+    if (login->address[0] && !ha_dash_websocket_url(login->address, cfg.url, sizeof(cfg.url))) {
+        login_result(false, "That address doesn't look right");
+        return;
+    }
+    if (cfg.url[0] == '\0') {
+        login_result(false, "Enter the Home Assistant address");
+        return;
+    }
+    if (!s_network) {
+        login_result(false, "No Wi-Fi connection");
+        return;
+    }
+
+    char refresh[sizeof(cfg.refresh_token)];
+    char error[HA_DASH_MESSAGE_LEN];
+    ESP_LOGI(TAG, "signing in to %s as %s", cfg.url, login->username);
+    esp_err_t err = ha_dash_auth_login(cfg.url, login->username, login->password,
+                                       refresh, sizeof(refresh), error, sizeof(error));
+    if (err != ESP_OK) {
+        login_result(false, error);
+        return;
+    }
+
+    strlcpy(cfg.refresh_token, refresh, sizeof(cfg.refresh_token));
+    strlcpy(cfg.username, login->username, sizeof(cfg.username));
+    cfg.token[0] = '\0'; /* the login replaces any long-lived token */
+    memset(refresh, 0, sizeof(refresh));
+    if (ha_dash_config_set(&cfg) != ESP_OK) {
+        login_result(false, "Signed in, but saving failed");
+        return;
+    }
+    s_access_token[0] = '\0';
+    s_auth_failures = 0;
+    login_result(true, "Signed in");
+    client_start();
+}
+
 static void client_stop(void)
 {
     if (s_client) {
@@ -548,11 +673,9 @@ static void client_start(void)
     client_stop();
 
     esp_err_t configured = ha_dash_config_get(&s_cfg);
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    strlcpy(s_snap->dashboard, s_cfg.dashboard, sizeof(s_snap->dashboard));
-    xSemaphoreGive(s_lock);
+    snapshot_connection();
     if (configured != ESP_OK) {
-        set_status(HA_DASH_STATUS_UNCONFIGURED, "Run setdash on the serial console");
+        set_status(HA_DASH_STATUS_UNCONFIGURED, "Sign in on the settings page");
         return;
     }
     if (!s_network) {
@@ -627,6 +750,11 @@ static void dash_task(void *arg)
             case DASH_ITEM_ACTION:
                 handle_action(&item.action);
                 break;
+            case DASH_ITEM_LOGIN:
+                handle_login(item.login);
+                memset(item.login, 0, sizeof(*item.login)); /* drop the password */
+                free(item.login);
+                break;
         }
     }
 }
@@ -653,6 +781,21 @@ void ha_dash_reload(void)
     post_item(&item, pdMS_TO_TICKS(100));
 }
 
+void ha_dash_login(const char *address, const char *username, const char *password)
+{
+    dash_item_t item = {.kind = DASH_ITEM_LOGIN, .login = dash_alloc(sizeof(dash_login_t))};
+    if (item.login == NULL) {
+        return;
+    }
+    strlcpy(item.login->address, address ? address : "", sizeof(item.login->address));
+    strlcpy(item.login->username, username ? username : "", sizeof(item.login->username));
+    strlcpy(item.login->password, password ? password : "", sizeof(item.login->password));
+    if (!post_item(&item, pdMS_TO_TICKS(100))) {
+        memset(item.login, 0, sizeof(*item.login));
+        free(item.login);
+    }
+}
+
 bool ha_dash_snapshot(ha_dash_snapshot_t *out)
 {
     if (s_lock == NULL) {
@@ -677,12 +820,11 @@ int ha_dash_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ha_dash_config_t cfg;
-    s_snap->status = ha_dash_config_get(&cfg) == ESP_OK ? HA_DASH_STATUS_WAITING_NETWORK
-                                                        : HA_DASH_STATUS_UNCONFIGURED;
-    strlcpy(s_snap->dashboard, cfg.dashboard, sizeof(s_snap->dashboard));
+    s_snap->status = ha_dash_config_get(&s_cfg) == ESP_OK ? HA_DASH_STATUS_WAITING_NETWORK
+                                                          : HA_DASH_STATUS_UNCONFIGURED;
+    snapshot_connection();
     strlcpy(s_snap->message,
-            s_snap->status == HA_DASH_STATUS_UNCONFIGURED ? "Run setdash on the serial console"
+            s_snap->status == HA_DASH_STATUS_UNCONFIGURED ? "Sign in on the settings page"
                                                           : "Waiting for Wi-Fi",
             sizeof(s_snap->message));
 

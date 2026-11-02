@@ -51,6 +51,7 @@ static const char *TAG = "ha-dash-screen";
 #define GLYPH_WARNING "\xEF\x81\xB1" /* U+F071 */
 #define GLYPH_HOME    "\xEF\x80\x95" /* U+F015 */
 #define GLYPH_CHECK   "\xEF\x80\x8C" /* U+F00C */
+#define GLYPH_GRID    "\xEF\x80\x89" /* U+F009 */
 #define GLYPH_BACK    "\xEF\x81\x93" /* U+F053 */
 #define GLYPH_NEXT    "\xEF\x81\x94" /* U+F054 */
 
@@ -393,7 +394,7 @@ static void update_panel(void)
         case HA_DASH_STATUS_UNCONFIGURED:
             icon = GLYPH_COG;
             title = "Connect to Home Assistant";
-            text = "On the serial console, run\nsetdash -a <host> -t <token>";
+            text = "Swipe left and tap Home Assistant\nto sign in.";
             break;
         case HA_DASH_STATUS_WAITING_NETWORK:
             icon = GLYPH_WIFI;
@@ -402,14 +403,16 @@ static void update_panel(void)
             break;
         case HA_DASH_STATUS_AUTH_FAILED:
             icon = GLYPH_WARNING;
-            title = "Access token rejected";
-            text = "Create a long-lived token in your\nHome Assistant profile, then run\nsetdash -t <token>";
+            title = "Signed out";
+            snprintf(error_text, sizeof(error_text),
+                     "%s\nSwipe left and tap Home Assistant\nto sign in again.", s_snap->message);
+            text = error_text;
             break;
         case HA_DASH_STATUS_ERROR:
             icon = GLYPH_WARNING;
             title = "Can't show the dashboard";
             snprintf(error_text, sizeof(error_text),
-                     "%s\nSwipe left and tap the Home Assistant\ncard to pick another dashboard.",
+                     "%s\nSwipe left and tap the dashboard card\nto pick another one.",
                      s_snap->message);
             text = error_text;
             break;
@@ -480,7 +483,7 @@ static void picker_fill(void)
                        s_snap->status == HA_DASH_STATUS_LOADING ||
                        s_snap->status == HA_DASH_STATUS_ERROR
                            ? "Loading dashboards..."
-                           : "Connect to Home Assistant to list dashboards.");
+                           : "Sign in first: tap Home Assistant\non the settings page.");
         return;
     }
 
@@ -519,24 +522,25 @@ static void picker_fill(void)
     }
 }
 
-static void picker_create(void)
+/* Full-screen pop-up on the top layer with a Back button and a title. */
+static lv_obj_t *make_modal(const char *title_text, lv_event_cb_t on_back)
 {
-    s_picker = lv_obj_create(lv_layer_top());
-    lv_obj_remove_style_all(s_picker);
-    lv_obj_set_size(s_picker, SCREEN_W, SCREEN_H);
-    lv_obj_set_style_bg_opa(s_picker, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_picker, lv_color_hex(COLOR_BG), LV_PART_MAIN);
-    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_CLICKABLE); /* swallow taps behind it */
-    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_t *modal = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(modal);
+    lv_obj_set_size(modal, SCREEN_W, SCREEN_H);
+    lv_obj_set_style_bg_opa(modal, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(modal, lv_color_hex(COLOR_BG), LV_PART_MAIN);
+    lv_obj_add_flag(modal, LV_OBJ_FLAG_CLICKABLE); /* swallow taps behind it */
+    lv_obj_remove_flag(modal, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    lv_obj_t *back = make_plain_box(s_picker);
+    lv_obj_t *back = make_plain_box(modal);
     lv_obj_set_size(back, 110, 52);
     lv_obj_set_pos(back, 8, 14);
     lv_obj_set_style_radius(back, 12, LV_PART_MAIN);
     lv_obj_set_style_bg_color(back, lv_color_hex(COLOR_CARD_PRESS), LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(back, on_picker_back, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(back, on_back, LV_EVENT_CLICKED, NULL);
     lv_obj_t *back_icon = make_label(back, &ui_font_dash16, COLOR_TEXT);
     lv_label_set_text(back_icon, "Back");
     lv_obj_align(back_icon, LV_ALIGN_LEFT_MID, 38, 0);
@@ -547,9 +551,35 @@ static void picker_create(void)
     lv_label_set_text(chevron, GLYPH_BACK);
     lv_obj_align(chevron, LV_ALIGN_LEFT_MID, 6, 0);
 
-    lv_obj_t *title = make_label(s_picker, &ui_font_dash20, COLOR_TEXT);
-    lv_label_set_text(title, "Choose dashboard");
+    lv_obj_t *title = make_label(modal, &ui_font_dash20, COLOR_TEXT);
+    lv_label_set_text(title, title_text);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
+    return modal;
+}
+
+/* Text button for a modal header's right side. */
+static lv_obj_t *make_header_button(lv_obj_t *modal, const char *text, uint32_t color,
+                                    lv_event_cb_t cb)
+{
+    lv_obj_t *button = make_plain_box(modal);
+    lv_obj_set_size(button, 110, 52);
+    lv_obj_set_pos(button, SCREEN_W - 110 - 8, 14);
+    lv_obj_set_style_radius(button, 12, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(button, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_70, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_set_style_opa(button, LV_OPA_40, LV_PART_MAIN | LV_STATE_DISABLED);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *label = make_label(button, &ui_font_dash16, COLOR_TEXT);
+    lv_label_set_text(label, text);
+    lv_obj_center(label);
+    return button;
+}
+
+static void picker_create(void)
+{
+    s_picker = make_modal("Choose dashboard", on_picker_back);
 
     s_picker_list = make_plain_box(s_picker);
     lv_obj_add_flag(s_picker_list, LV_OBJ_FLAG_SCROLLABLE);
@@ -587,6 +617,182 @@ static void update_picker(void)
     }
 }
 
+/* ── Sign-in form ───────────────────────────────────────────────────────── */
+
+#define LOGIN_FIELD_H   46
+#define LOGIN_FIELD_Y   80
+#define LOGIN_FIELD_GAP 8
+#define LOGIN_KB_H      200
+
+static lv_obj_t *s_login;
+static lv_obj_t *s_login_address;
+static lv_obj_t *s_login_user;
+static lv_obj_t *s_login_pass;
+static lv_obj_t *s_login_status;
+static lv_obj_t *s_login_button;
+static lv_obj_t *s_login_kb;
+static bool s_login_waiting;
+static uint32_t s_login_wait_revision;
+
+static void login_set_status(const char *text, uint32_t color)
+{
+    lv_label_set_text(s_login_status, text);
+    lv_obj_set_style_text_color(s_login_status, lv_color_hex(color), LV_PART_MAIN);
+}
+
+static void login_close(void)
+{
+    if (s_login) {
+        lv_obj_add_flag(s_login_kb, LV_OBJ_FLAG_HIDDEN);
+        lv_textarea_set_text(s_login_pass, "");
+        lv_obj_add_flag(s_login, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void on_login_back(lv_event_t *e)
+{
+    (void)e;
+    login_close();
+}
+
+static void login_submit(void)
+{
+    const char *address = lv_textarea_get_text(s_login_address);
+    const char *user = lv_textarea_get_text(s_login_user);
+    const char *pass = lv_textarea_get_text(s_login_pass);
+    if (address[0] == '\0' || user[0] == '\0' || pass[0] == '\0') {
+        login_set_status("Fill in address, username and password", COLOR_ERROR);
+        return;
+    }
+    lv_obj_add_flag(s_login_kb, LV_OBJ_FLAG_HIDDEN);
+    s_login_waiting = true;
+    s_login_wait_revision = s_snap->login_revision;
+    lv_obj_add_state(s_login_button, LV_STATE_DISABLED);
+    login_set_status("Signing in...", COLOR_MUTED);
+    ha_dash_login(address, user, pass);
+    lv_textarea_set_text(s_login_pass, "");
+}
+
+static void on_login_button(lv_event_t *e)
+{
+    (void)e;
+    if (!s_login_waiting) {
+        login_submit();
+    }
+}
+
+static void on_login_field(lv_event_t *e)
+{
+    lv_obj_t *field = lv_event_get_target_obj(e);
+    lv_keyboard_set_textarea(s_login_kb, field);
+    lv_obj_remove_flag(s_login_kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_login_keyboard(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CANCEL) {
+        lv_obj_add_flag(s_login_kb, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    /* Enter moves to the next field, and signs in from the password. */
+    lv_obj_t *field = lv_keyboard_get_textarea(s_login_kb);
+    if (field == s_login_address) {
+        lv_obj_send_event(s_login_user, LV_EVENT_CLICKED, NULL);
+    } else if (field == s_login_user) {
+        lv_obj_send_event(s_login_pass, LV_EVENT_CLICKED, NULL);
+    } else if (!s_login_waiting) {
+        login_submit();
+    }
+}
+
+static lv_obj_t *login_field(int32_t y, const char *placeholder, bool password)
+{
+    lv_obj_t *field = lv_textarea_create(s_login);
+    lv_textarea_set_one_line(field, true);
+    lv_textarea_set_placeholder_text(field, placeholder);
+    lv_textarea_set_password_mode(field, password);
+    lv_textarea_set_max_length(field, password ? 63 : 120);
+    lv_obj_set_size(field, WIDE_W, LOGIN_FIELD_H);
+    lv_obj_set_pos(field, BODY_PAD, y);
+    lv_obj_set_style_text_font(field, &ui_font_dash20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(field, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_text_color(field, lv_color_hex(COLOR_ICON_IDLE), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_bg_color(field, lv_color_hex(COLOR_CARD), LV_PART_MAIN);
+    lv_obj_set_style_border_width(field, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(field, 2, LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(field, lv_color_hex(COLOR_SENSOR), LV_PART_MAIN | LV_STATE_FOCUSED);
+    lv_obj_set_style_radius(field, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(field, 14, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(field, 10, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(field, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(field, on_login_field, LV_EVENT_CLICKED, NULL);
+    return field;
+}
+
+static void login_create(void)
+{
+    s_login = make_modal("Sign in", on_login_back);
+    s_login_button = make_header_button(s_login, "Sign in", 0x2E7D9A, on_login_button);
+
+    s_login_address = login_field(LOGIN_FIELD_Y, "Address, e.g. 192.168.1.10:8123", false);
+    s_login_user = login_field(LOGIN_FIELD_Y + LOGIN_FIELD_H + LOGIN_FIELD_GAP, "Username", false);
+    s_login_pass = login_field(LOGIN_FIELD_Y + 2 * (LOGIN_FIELD_H + LOGIN_FIELD_GAP), "Password", true);
+
+    /* Sits just above the keyboard so it stays visible while typing. */
+    s_login_status = make_line_label(s_login, &ui_font_dash16, COLOR_MUTED, WIDE_W);
+    lv_obj_set_pos(s_login_status, BODY_PAD + 4, LOGIN_FIELD_Y + 3 * (LOGIN_FIELD_H + LOGIN_FIELD_GAP) + 2);
+
+    s_login_kb = lv_keyboard_create(s_login);
+    lv_obj_set_size(s_login_kb, SCREEN_W, LOGIN_KB_H);
+    lv_obj_align(s_login_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_event_cb(s_login_kb, on_login_keyboard, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(s_login_kb, on_login_keyboard, LV_EVENT_CANCEL, NULL);
+    lv_obj_add_flag(s_login_kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void login_open(void)
+{
+    if (s_login == NULL) {
+        login_create();
+    }
+    lv_textarea_set_text(s_login_address, s_snap->server);
+    lv_textarea_set_text(s_login_user, s_snap->username);
+    lv_textarea_set_text(s_login_pass, "");
+    s_login_waiting = false;
+    lv_obj_remove_state(s_login_button, LV_STATE_DISABLED);
+    if (s_snap->username[0]) {
+        char text[HA_DASH_NAME_LEN + 24];
+        snprintf(text, sizeof(text), "Signed in as %s", s_snap->username);
+        login_set_status(text, COLOR_MUTED);
+    } else {
+        login_set_status("Your password is used once and not stored.", COLOR_MUTED);
+    }
+    lv_obj_remove_flag(s_login, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_login);
+    /* Start typing in the first empty field. */
+    lv_obj_t *first = s_snap->server[0] == '\0' ? s_login_address
+                      : s_snap->username[0] == '\0' ? s_login_user
+                                                     : s_login_pass;
+    lv_obj_send_event(first, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_state(first, LV_STATE_FOCUSED);
+}
+
+static void update_login(void)
+{
+    if (s_login == NULL || !s_login_waiting || s_snap->login_revision == s_login_wait_revision) {
+        return;
+    }
+    s_login_waiting = false;
+    lv_obj_remove_state(s_login_button, LV_STATE_DISABLED);
+    if (s_snap->login_ok) {
+        login_close();
+        picker_close();
+        nav_go_tile(NAV_TILE_HA_DASH);
+    } else {
+        login_set_status(s_snap->login_message, COLOR_ERROR);
+    }
+}
+
 static void render(void)
 {
     if (s_snap->layout_generation != s_built_generation) {
@@ -594,6 +800,7 @@ static void render(void)
     }
     update_status_card();
     update_picker();
+    update_login();
     update_panel();
     for (int i = 0; i < s_snap->tile_count; i++) {
         tile_widgets_t *w = &s_tiles[i];
@@ -606,6 +813,19 @@ static void render(void)
             w->fresh = false;
         }
     }
+}
+
+/* Settings page "Home Assistant" button. */
+static void on_screen_start(void *context, enum view_event_id id, const void *payload)
+{
+    if (*(const uint8_t *)payload != SCREEN_HA_LOGIN) {
+        return;
+    }
+    lv_port_sem_take();
+    if (s_snap) {
+        login_open();
+    }
+    lv_port_sem_give();
 }
 
 static void on_dash_changed(void *context, enum view_event_id id, const void *payload)
@@ -639,7 +859,7 @@ static void create_status_card(lv_obj_t *slot)
     lv_obj_align(chevron, LV_ALIGN_RIGHT_MID, -12, 0);
 
     s_status_icon = make_label(slot, &ui_font_dash_icons, COLOR_MUTED);
-    lv_label_set_text(s_status_icon, GLYPH_HOME);
+    lv_label_set_text(s_status_icon, GLYPH_GRID);
     lv_obj_align(s_status_icon, LV_ALIGN_LEFT_MID, 22, 0);
 
     s_title = make_line_label(slot, &ui_font_dash20, COLOR_TEXT, width - 130);
@@ -719,7 +939,8 @@ void ha_dash_screen_create(void)
     render();
     lv_port_sem_give();
 
-    if (!view_event_subscribe(VIEW_EVENT_HA_DASH_CHANGED, on_dash_changed, NULL)) {
+    if (!view_event_subscribe(VIEW_EVENT_HA_DASH_CHANGED, on_dash_changed, NULL) ||
+        !view_event_subscribe(VIEW_EVENT_SCREEN_START, on_screen_start, NULL)) {
         ESP_LOGE(TAG, "failed to subscribe to dashboard changes");
     }
 }

@@ -41,6 +41,10 @@ static const char *TAG = "settings-view";
 #define GLYPH_WIFI  "\xEF\x87\xAB" /* U+F1EB */
 #define GLYPH_SUN   "\xEF\x86\x85" /* U+F185 */
 #define GLYPH_GLOBE "\xEF\x82\xAC" /* U+F0AC */
+#define GLYPH_HOME  "\xEF\x80\x95" /* U+F015 */
+
+/* The MQTT broker button is hidden for now; the dashboard doesn't use MQTT. */
+#define SETTINGS_SHOW_MQTT 0
 
 static lv_obj_t *s_settings_page = NULL;
 static lv_obj_t *s_ha_slot = NULL;
@@ -104,6 +108,15 @@ static void settings_open_display(lv_event_t *e)
 	}
 }
 
+static void settings_open_home_assistant(lv_event_t *e)
+{
+	if(lv_event_get_code(e) == LV_EVENT_CLICKED)
+	{
+		(void)settings_post_screen(SCREEN_HA_LOGIN);
+	}
+}
+
+#if SETTINGS_SHOW_MQTT
 static void settings_open_broker(lv_event_t *e)
 {
 	if(lv_event_get_code(e) == LV_EVENT_CLICKED)
@@ -111,6 +124,7 @@ static void settings_open_broker(lv_event_t *e)
 		(void)settings_post_screen(SCREEN_BROKER_MODAL);
 	}
 }
+#endif
 
 void settings_view_show(void)
 {
@@ -196,8 +210,12 @@ static void settings_create_page(lv_obj_t *tile)
 						   settings_open_wifi);
 	settings_create_action(tile, PAD + ACTION_W + GAP, 0xEEBF41, GLYPH_SUN,
 						   "Display", settings_open_display);
+	settings_create_action(tile, PAD + 2 * (ACTION_W + GAP), 0x41BDF5,
+						   GLYPH_HOME, "Home Assistant", settings_open_home_assistant);
+#if SETTINGS_SHOW_MQTT
 	settings_create_action(tile, PAD + 2 * (ACTION_W + GAP), 0xE66D39,
 						   GLYPH_GLOBE, "MQTT", settings_open_broker);
+#endif
 
 	lv_obj_t *info = settings_box(tile, PAD, INFO_Y, PAGE_W - 2 * PAD, INFO_H);
 	settings_style_card(info);

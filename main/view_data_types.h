@@ -15,6 +15,7 @@ enum start_screen {
     SCREEN_WIFI_CONFIG = 1,
     SCREEN_DISPLAY_MODAL = 2,
     SCREEN_BROKER_MODAL = 3,
+    SCREEN_HA_LOGIN = 4,
 };
 
 /* ── WiFi ─────────────────────────────────────────────────────────────────── */

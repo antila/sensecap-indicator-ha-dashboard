@@ -10,6 +10,8 @@ static const char *TAG = "ha-dash-cfg";
 #define DASH_URL_STORAGE   "dash-url"
 #define DASH_TOKEN_STORAGE "dash-token"
 #define DASH_BOARD_STORAGE "dash-board"
+#define DASH_REFRESH_STORAGE "dash-refresh"
+#define DASH_USER_STORAGE  "dash-user"
 
 static void read_string(char *key, char *buf, size_t size)
 {
@@ -25,6 +27,8 @@ esp_err_t ha_dash_config_get(ha_dash_config_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     read_string(DASH_URL_STORAGE, cfg->url, sizeof(cfg->url));
     read_string(DASH_TOKEN_STORAGE, cfg->token, sizeof(cfg->token));
+    read_string(DASH_REFRESH_STORAGE, cfg->refresh_token, sizeof(cfg->refresh_token));
+    read_string(DASH_USER_STORAGE, cfg->username, sizeof(cfg->username));
 
     /* Values are stored with their NUL terminator, so an explicitly stored
      * empty string (HA's default dashboard) is still a one-byte blob. */
@@ -35,7 +39,7 @@ esp_err_t ha_dash_config_get(ha_dash_config_t *cfg)
         cfg->dashboard[len] = '\0';
     }
 
-    return (cfg->url[0] && cfg->token[0]) ? ESP_OK : ESP_ERR_NOT_FOUND;
+    return (cfg->url[0] && (cfg->token[0] || cfg->refresh_token[0])) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t ha_dash_config_set(const ha_dash_config_t *cfg)
@@ -46,6 +50,13 @@ esp_err_t ha_dash_config_set(const ha_dash_config_t *cfg)
     }
     if (err == ESP_OK) {
         err = indicator_nvs_write(DASH_BOARD_STORAGE, (void *)cfg->dashboard, strlen(cfg->dashboard) + 1);
+    }
+    if (err == ESP_OK) {
+        err = indicator_nvs_write(DASH_REFRESH_STORAGE, (void *)cfg->refresh_token,
+                                  strlen(cfg->refresh_token) + 1);
+    }
+    if (err == ESP_OK) {
+        err = indicator_nvs_write(DASH_USER_STORAGE, (void *)cfg->username, strlen(cfg->username) + 1);
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "failed to store dashboard config: %s", esp_err_to_name(err));

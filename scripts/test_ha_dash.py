@@ -281,6 +281,30 @@ class HaDashTests(unittest.TestCase):
         }
         """)
 
+    def test_auth_url_helpers(self):
+        self.run_harness(r"""
+        int main(void)
+        {
+            char out[96];
+            assert(ha_dash_http_base("ws://192.168.1.10:8123/api/websocket", out, sizeof(out)));
+            EXPECT_STR(out, "http://192.168.1.10:8123");
+            assert(ha_dash_http_base("wss://example.ui.nabu.casa/api/websocket", out, sizeof(out)));
+            EXPECT_STR(out, "https://example.ui.nabu.casa");
+            assert(!ha_dash_http_base("ws://host:8123/api/websocket", out, 10));
+            ha_dash_server_label("ws://192.168.1.10:8123/api/websocket", out, sizeof(out));
+            EXPECT_STR(out, "192.168.1.10:8123");
+            ha_dash_server_label("", out, sizeof(out));
+            EXPECT_STR(out, "");
+
+            assert(ha_dash_url_encode("http://sensecap-indicator.local/", out, sizeof(out)) > 0);
+            EXPECT_STR(out, "http%3A%2F%2Fsensecap-indicator.local%2F");
+            assert(ha_dash_url_encode("a b&c=d~", out, sizeof(out)) > 0);
+            EXPECT_STR(out, "a%20b%26c%3Dd~");
+            assert(ha_dash_url_encode("åäö", out, 4) == -1);
+            return 0;
+        }
+        """)
+
 
 if __name__ == "__main__":
     unittest.main()

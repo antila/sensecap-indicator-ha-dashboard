@@ -316,8 +316,12 @@ static void register_mqtt_ca(void) {
 static void print_dash_usage(void) {
     printf("\nHome Assistant dashboard\n");
     printf("  The first screen mirrors a Lovelace dashboard over the WebSocket API.\n\n");
-    printf("  Set address, token and dashboard:\n");
-    printf("    setdash -a 192.168.1.10 -t <long-lived-token> -d touch-screen\n");
+    printf("  Sign in with your Home Assistant account (only a refresh token is stored):\n");
+    printf("    setdash -a 192.168.1.10 -u <username> -p <password>\n");
+    printf("  ...or use a long-lived access token:\n");
+    printf("    setdash -a 192.168.1.10 -t <long-lived-token>\n");
+    printf("  Pick the dashboard (also possible on the settings page):\n");
+    printf("    setdash -d touch-screen\n");
     printf("    setdash -a https://example.ui.nabu.casa\n");
     printf("    setdash -d default        (Home Assistant's default dashboard)\n\n");
     printf("  Show current settings:\n");
@@ -325,21 +329,23 @@ static void print_dash_usage(void) {
     printf("  Notes:\n");
     printf("    - A bare host uses port 8123. The dashboard is its URL path, e.g.\n");
     printf("      'touch-screen' for http://ha:8123/touch-screen.\n");
-    printf("    - Create the token under your Home Assistant profile -> Security.\n");
-    printf("      It is stored unencrypted on the device; a dedicated user is safer.\n\n");
+    printf("    - Tokens are stored unencrypted on the device; a dedicated user is safer.\n");
+    printf("    - Two-factor login is not supported; use a long-lived token instead.\n\n");
 }
 
 static int dash_config_show(int argc, char **argv) {
     ha_dash_config_t cfg;
     ha_dash_config_get(&cfg);
     char token[48];
-    if (cfg.token[0]) {
-        snprintf(token, sizeof(token), "**** (%u chars)", (unsigned)strlen(cfg.token));
+    if (cfg.refresh_token[0]) {
+        snprintf(token, sizeof(token), "signed in as %s", cfg.username);
+    } else if (cfg.token[0]) {
+        snprintf(token, sizeof(token), "long-lived token (%u chars)", (unsigned)strlen(cfg.token));
     } else {
         snprintf(token, sizeof(token), "(not set)");
     }
     ESP_LOGI(TAG, "| Home Assistant URL           | %-40s |", cfg.url[0] ? cfg.url : "(not set)");
-    ESP_LOGI(TAG, "| Access token                 | %-40s |", token);
+    ESP_LOGI(TAG, "| Login                        | %-40s |", token);
     ESP_LOGI(TAG, "| Dashboard                    | %-40s |", cfg.dashboard[0] ? cfg.dashboard : "(default)");
     return 0;
 }
@@ -357,6 +363,8 @@ static void register_dash_show(void) {
 struct {
     struct arg_str *addr;
     struct arg_str *token;
+    struct arg_str *username;
+    struct arg_str *password;
     struct arg_str *dashboard;
     struct arg_end *end;
 } dash_args;
@@ -368,9 +376,29 @@ static int dash_config_set(int argc, char **argv) {
         print_dash_usage();
         return 1;
     }
-    if (!dash_args.addr->count && !dash_args.token->count && !dash_args.dashboard->count) {
+    if (!dash_args.addr->count && !dash_args.token->count && !dash_args.dashboard->count &&
+        !dash_args.username->count && !dash_args.password->count) {
         print_dash_usage();
         return dash_config_show(0, NULL);
+    }
+
+    if (dash_args.username->count || dash_args.password->count) {
+        if (!dash_args.username->count || !dash_args.password->count) {
+            ESP_LOGE(TAG, "Signing in needs both -u <username> and -p <password>");
+            return 1;
+        }
+        if (dash_args.token->count) {
+            ESP_LOGE(TAG, "Use either -u/-p or -t, not both");
+            return 1;
+        }
+        if (dash_args.dashboard->count) {
+            ESP_LOGE(TAG, "Set the dashboard separately: setdash -d <url_path>");
+            return 1;
+        }
+        ha_dash_login(dash_args.addr->count ? dash_args.addr->sval[0] : "",
+                      dash_args.username->sval[0], dash_args.password->sval[0]);
+        ESP_LOGI(TAG, "Signing in as %s; watch for 'ha-dash' log lines", dash_args.username->sval[0]);
+        return 0;
     }
 
     ha_dash_config_t cfg;
@@ -389,6 +417,8 @@ static int dash_config_set(int argc, char **argv) {
             return 1;
         }
         strlcpy(cfg.token, dash_args.token->sval[0], sizeof(cfg.token));
+        cfg.refresh_token[0] = '\0'; /* the token replaces a username/password login */
+        cfg.username[0] = '\0';
         ESP_LOGI(TAG, "Set access token: **** (%u chars)", (unsigned)strlen(cfg.token));
     }
     if (dash_args.dashboard->count > 0) {
@@ -408,9 +438,9 @@ static int dash_config_set(int argc, char **argv) {
         ESP_LOGE(TAG, "Failed to save dashboard configuration");
         return 1;
     }
-    if (!cfg.url[0] || !cfg.token[0]) {
+    if (!cfg.url[0] || (!cfg.token[0] && !cfg.refresh_token[0])) {
         ESP_LOGW(TAG, "Saved. Still needed: %s%s", cfg.url[0] ? "" : "-a <address> ",
-                 cfg.token[0] ? "" : "-t <token>");
+                 (cfg.token[0] || cfg.refresh_token[0]) ? "" : "-u <user> -p <password> or -t <token>");
         return 0;
     }
     ha_dash_reload();
@@ -422,13 +452,15 @@ static void register_dash_config(void) {
     dash_args.addr      = arg_str0("a", "addr", "<address>",
                                    "Home Assistant address, e.g. 192.168.1.10, ha.local:8123 or https://host");
     dash_args.token     = arg_str0("t", "token", "<token>", "Long-lived access token");
+    dash_args.username  = arg_str0("u", "user", "<username>", "Home Assistant username (with -p)");
+    dash_args.password  = arg_str0("p", "password", "<password>", "Home Assistant password, used once to sign in");
     dash_args.dashboard = arg_str0("d", "dashboard", "<url_path>",
                                    "Dashboard URL path, e.g. touch-screen; 'default' for the default dashboard");
-    dash_args.end       = arg_end(4);
+    dash_args.end       = arg_end(6);
 
     const esp_console_cmd_t cmd = {
         .command  = "setdash",
-        .help     = "Set the Home Assistant dashboard connection. Example: setdash -a 192.168.1.10 -t <token> -d touch-screen",
+        .help     = "Connect to Home Assistant. Example: setdash -a 192.168.1.10 -u <user> -p <password>",
         .hint     = NULL,
         .func     = &dash_config_set,
         .argtable = &dash_args,

@@ -17,7 +17,8 @@ each feature slice owns its full stack (data model + MQTT protocol + UI componen
 | `ha_switch.c` | Switch entity metadata, in-memory authoritative state, MQTT publish/subscribe, and generation-tagged publish results. UI-free. |
 | `ha_switch_sync.c` | Pure generation/debounce/result state module. Owns stale-result filtering and rollback decisions. Currently has no on-screen user. |
 | `ha_dash.c` | Dashboard mirror model: Home Assistant WebSocket client, auth, `lovelace/config`, `subscribe_entities`, `call_service`. Owns the snapshot behind a mutex. UI-free. |
-| `ha_dash_config.c` | Dashboard URL, access token and dashboard path under their own NVS keys. |
+| `ha_dash_config.c` | Dashboard URL, long-lived token or refresh token, username and dashboard path under their own NVS keys. |
+| `ha_dash_auth.c` | Username/password sign-in over HTTP (`/auth/login_flow`, `/auth/token`) and access-token refresh. Blocking; worker task only. |
 | `ha_dash_layout.c` | Pure cJSON helpers: Lovelace config to tiles, entity state updates, service-call messages, URL normalization. Host-tested. |
 | `ha_dash_present.c` | Pure icon/state-text helpers for tiles. Host-tested. |
 | `ha_dash_screen.c` | Builds the dashboard page on `NAV_TILE_HA_DASH` from snapshots; posts tap/slider actions. |
@@ -78,6 +79,13 @@ User taps a dashboard tile or releases a light slider
   → ha_dash_screen.c posts VIEW_EVENT_HA_DASH_ACTION {layout_generation, index, action, value}
   → ha_dash.c drops it if the layout changed meanwhile, else sends call_service
   → Home Assistant's state change comes back through subscribe_entities
+
+User signs in (settings page → Home Assistant button)
+  → settings_view.c posts VIEW_EVENT_SCREEN_START {SCREEN_HA_LOGIN}; ha_dash_screen.c opens the form
+  → on submit ha_dash_screen.c calls ha_dash_login() directly (keeps the password out of the event queue)
+  → ha_dash.c worker runs the login flow, stores the refresh token, reconnects
+  → before each WebSocket auth an access token is minted if the old one is near expiry
+  → result reported through the snapshot's login_* fields
 
 User picks a dashboard (settings page → status card → picker)
   → opening the picker posts HA_DASH_ACTION_LIST_DASHBOARDS → lovelace/dashboards/list

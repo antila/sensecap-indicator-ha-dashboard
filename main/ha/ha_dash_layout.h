@@ -48,6 +48,18 @@ int ha_dash_build_action(const ha_dash_tile_t *tile, ha_dash_action_t action,
  * or the input is empty. */
 bool ha_dash_websocket_url(const char *input, char *out, size_t len);
 
+/* "ws://host:8123/api/websocket" -> "http://host:8123" (wss -> https), the
+ * base for the /auth endpoints. Returns false if out is too small. */
+bool ha_dash_http_base(const char *ws_url, char *out, size_t len);
+
+/* "ws://host:8123/api/websocket" -> "host:8123", for display and for
+ * pre-filling the sign-in form. */
+void ha_dash_server_label(const char *ws_url, char *out, size_t len);
+
+/* Percent-encode text for an application/x-www-form-urlencoded body.
+ * Returns the encoded length, or -1 if out is too small. */
+int ha_dash_url_encode(const char *text, char *out, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

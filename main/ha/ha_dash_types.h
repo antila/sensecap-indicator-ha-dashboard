@@ -87,6 +87,15 @@ typedef struct {
     uint8_t tile_count;
     ha_dash_tile_t tiles[HA_DASH_MAX_TILES];
 
+    /* Connection details, for the settings page and the sign-in form. */
+    char server[HA_DASH_PATH_LEN];   /* "host:port" */
+    char username[HA_DASH_NAME_LEN]; /* empty when using a long-lived token */
+
+    /* Result of the last sign-in attempt. */
+    uint32_t login_revision;          /* bumped when an attempt finishes */
+    bool login_ok;
+    char login_message[HA_DASH_MESSAGE_LEN];
+
     uint32_t boards_revision; /* bumped whenever boards[] is refreshed */
     uint8_t board_count;
     ha_dash_board_t boards[HA_DASH_MAX_BOARDS];

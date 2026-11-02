@@ -264,6 +264,63 @@ int ha_dash_layout_parse(const cJSON *config, ha_dash_snapshot_t *out)
     return out->tile_count;
 }
 
+static const char *skip_scheme(const char *url, const char **scheme_end)
+{
+    const char *sep = strstr(url, "://");
+    if (scheme_end) {
+        *scheme_end = sep;
+    }
+    return sep ? sep + 3 : url;
+}
+
+bool ha_dash_http_base(const char *ws_url, char *out, size_t len)
+{
+    const char *scheme_end = NULL;
+    const char *host = skip_scheme(ws_url, &scheme_end);
+    bool secure = scheme_end && (size_t)(scheme_end - ws_url) == 3 && strncmp(ws_url, "wss", 3) == 0;
+    const char *slash = strchr(host, '/');
+    int host_len = (int)(slash ? (size_t)(slash - host) : strlen(host));
+    if (host_len == 0) {
+        return false;
+    }
+    int n = snprintf(out, len, "%s://%.*s", secure ? "https" : "http", host_len, host);
+    return n > 0 && (size_t)n < len;
+}
+
+void ha_dash_server_label(const char *ws_url, char *out, size_t len)
+{
+    const char *host = skip_scheme(ws_url, NULL);
+    const char *slash = strchr(host, '/');
+    int host_len = (int)(slash ? (size_t)(slash - host) : strlen(host));
+    snprintf(out, len, "%.*s", host_len, host);
+}
+
+int ha_dash_url_encode(const char *text, char *out, size_t len)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        bool plain = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                     (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.' || *p == '~';
+        size_t need = plain ? 1 : 3;
+        if (n + need >= len) {
+            return -1;
+        }
+        if (plain) {
+            out[n++] = (char)*p;
+        } else {
+            out[n++] = '%';
+            out[n++] = HEX[*p >> 4];
+            out[n++] = HEX[*p & 0xF];
+        }
+    }
+    if (len == 0) {
+        return -1;
+    }
+    out[n] = '\0';
+    return (int)n;
+}
+
 int ha_dash_parse_dashboards(const cJSON *result, ha_dash_board_t *out, int max)
 {
     int count = 0;

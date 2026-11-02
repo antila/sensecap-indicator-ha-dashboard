@@ -139,21 +139,29 @@ The RP2040 firmware only needs rebuilding when its sensor or UART code changes:
 The main screen mirrors one Lovelace dashboard over Home Assistant's WebSocket
 API. Add cards to that dashboard in Home Assistant and they appear on the
 device; edits show up live. Swipe left for the settings page: connection
-status, Wi-Fi, display, MQTT broker, IP address and firmware version.
+status, dashboard picker, Wi-Fi, display, Home Assistant sign-in, IP address
+and firmware version. (The MQTT broker button is hidden; see
+`SETTINGS_SHOW_MQTT` in `main/settings/settings_view.c`.)
 
 1. In Home Assistant, create a dashboard (e.g. URL `touch-screen`) and add
    cards. Button, tile, entity, entities, glance, heading, stacks and grids are
    read; only the first view is shown.
-2. Create a long-lived access token (profile → Security). A dedicated, non-admin
-   user is a good idea since the token is stored unencrypted on the device.
-3. On the serial console:
+2. Swipe left to the settings page, tap **Home Assistant** and sign in
+   with the address (e.g. `192.168.1.10:8123`), username and password. The
+   password is used once for Home Assistant's login flow; only the resulting
+   refresh token is stored, and the device mints 30-minute access tokens from
+   it. A dedicated, non-admin user is a good idea since the refresh token is
+   stored unencrypted on the device. Two-factor login is not supported.
+3. Or from the serial console, with an account or a long-lived access token
+   (profile → Security):
 
    ```text
+   setdash -a 192.168.1.10 -u <username> -p <password>
    setdash -a 192.168.1.10 -t <token>
    dashconfig
    ```
 
-4. Swipe left to the settings page and tap the Home Assistant card to choose
+4. Swipe left to the settings page and tap the dashboard card to choose
    which dashboard to show. The choice is saved on the device (`setdash -d
    <url_path>` does the same from the console). Auto-generated dashboards,
    including an unedited default dashboard, have no saved cards and can't be
@@ -177,7 +185,8 @@ Connect to the ESP32-S3 console at 115200 baud.
 | `setmqtt -a <addr> -c <client-id> -u <user> -p <pass>` | Set the complete broker configuration |
 | `setmqtt --insecure` / `--secure` | Skip / re-enable TLS server verification (mqtts only) |
 | `setmqttca` / `setmqttca -c` | Paste a CA certificate for `mqtts://`, or clear it |
-| `setdash -a <addr> -t <token> -d <dashboard>` | Set the Home Assistant dashboard connection |
+| `setdash -a <addr> -u <user> -p <password>` | Sign in to Home Assistant (stores a refresh token, not the password) |
+| `setdash -a <addr> -t <token> -d <dashboard>` | Use a long-lived token / pick the dashboard |
 | `dashconfig` | Show the dashboard connection settings (token masked) |
 
 Examples:
